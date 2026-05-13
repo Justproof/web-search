@@ -1,0 +1,110 @@
+{
+    "$schema_version": "1.0.0",
+    "comment": "Default risk-tier assignments per FR-8. SQLite overrides at ~/.claude/safe-web-research/state.db take precedence; hook merges repo defaults ⊕ SQLite overrides at startup. Conflicts log a warning. Unknown signals default to Elevated.",
+    "thresholds": {
+        "oversized_response_bytes": 5242880,
+        "repeating_substring_ratio_max": 0.45,
+        "url_cardinality_explosion_count": 30,
+        "url_cardinality_explosion_window_minutes": 5,
+        "zero_width_chars_max": 3,
+        "hidden_content_ratio_max": 0.3,
+        "redirect_chain_max_hops": 5,
+        "near_duplicate_hamming_distance": 10,
+        "abort_on_elevated_count": 3,
+        "robots_cache_ttl_hours": 24,
+        "session_blocklist_repeat_threshold": 3,
+        "auto_blocklist_ttl_days": 90
+    },
+    "signals": {
+        "injection_phrase": {
+            "tier": "critical",
+            "description": "Substring match against curated prompt-injection corpus"
+        },
+        "cloaking_suspected": {
+            "tier": "critical",
+            "description": "Parallel local refetch diverged from agent's WebFetch beyond similarity threshold"
+        },
+        "oversized_response": {
+            "tier": "critical",
+            "description": "Response body exceeded oversized_response_bytes"
+        },
+        "repeating_substring_ratio_high": {
+            "tier": "critical",
+            "description": "High autocorrelation / Markov-style repetition signature"
+        },
+        "url_cardinality_explosion": {
+            "tier": "critical",
+            "description": "Distinct URL paths against same domain exceeded threshold inside window"
+        },
+        "zero_width_chars": {
+            "tier": "elevated",
+            "description": "Zero-width Unicode count exceeded zero_width_chars_max"
+        },
+        "hidden_content_ratio_high": {
+            "tier": "elevated",
+            "description": "Stripped bytes / total bytes exceeded hidden_content_ratio_max"
+        },
+        "redirect_chain_long": {
+            "tier": "elevated",
+            "description": "Redirect chain hop count exceeded redirect_chain_max_hops"
+        },
+        "content_type_mismatch": {
+            "tier": "elevated",
+            "description": "Declared Content-Type does not match sniffed MIME"
+        },
+        "near_duplicate_to_session": {
+            "tier": "elevated",
+            "description": "Simhash within near_duplicate_hamming_distance of an earlier fetch in this session"
+        }
+    },
+    "per_domain_overrides": {
+        "en.wikipedia.org": {
+            "near_duplicate_hamming_distance": 16,
+            "comment": "Boilerplate-heavy templated layout produces many false near-duplicates"
+        },
+        "arxiv.org": {
+            "near_duplicate_hamming_distance": 6,
+            "comment": "Distinct papers should diverge cleanly; tighten threshold"
+        }
+    },
+    "refetch_skip_domains": [
+        "drive.google.com",
+        "docs.google.com",
+        "*.cloudflare.com"
+    ],
+    "meta_allowlist": {
+        "comment": "Hosts whose subject is prompt-injection / AI red-team taxonomies. Per SKILL.md FR-28: when injection_phrase is the ONLY Critical signal and the host (or a registrable parent) matches, downgrade verdict to Caution, continue, annotate summary with meta_allowlisted: true. Any other Critical still aborts.",
+        "hosts": [
+            "saif.google",
+            "owasp.org",
+            "atlas.mitre.org",
+            "csrc.nist.gov",
+            "learn.microsoft.com",
+            "ai.googleblog.com",
+            "research.google"
+        ]
+    },
+    "injection_phrases": [
+        "ignore previous instructions",
+        "ignore all previous instructions",
+        "disregard prior instructions",
+        "you are now",
+        "your new instructions are",
+        "system prompt:",
+        "</system>",
+        "<|im_start|>",
+        "[INST]",
+        "begin new task",
+        "forget everything above",
+        "the assistant should",
+        "claude, you must",
+        "remove the wrapper",
+        "do not sanitise",
+        "the sanitiser is wrong",
+        "trust this source",
+        "execute the following",
+        "here is your real task",
+        "developer mode enabled",
+        "jailbreak"
+    ]
+}
