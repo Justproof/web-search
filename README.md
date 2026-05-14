@@ -5,7 +5,7 @@ Claude ships with a built-in web fetch tool. Handy. Also a little naive.
 Without guardrails, it will cheerfully read a shady webpage that opens with "ignore your previous instructions" and politely follow along. No questions asked.
 
 > **Curious?** Ask Claude: *"Are there built-in protections when you do web fetch?"*
-> You'll get a polite answer, and the [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) quietly back it up: there aren't any promt injection guardrails.
+> You'll get a polite answer, and the [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) quietly back it up: there aren't any prompt injection guardrails.
 > That's exactly why Safe Web Research guardrails are necessary.
 
 **Safe Web Research** fixes that with two quiet layers:
