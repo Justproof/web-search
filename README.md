@@ -5,8 +5,8 @@ Claude has two built-in web tools <a href="https://platform.claude.com/docs/en/a
 Most people approve or switch default Mode to "auto", which allows web searching with full permission. Full auto is a reasonable choice, but consider what this means when using AI to search the internet: not every site out there has good intentions for an AI crawler, and certain <a href="https://pcdrama.com/blog/ai-tarpits#why-web-admins-send-non-sense-to-ai">"Stay off my lawn / website" web admins</a> are punching back by relaying non-sense to bots, causing AI to struggle through AI tarpits.
 Without guardrails, it will cheerfully read a shady webpage that opens with "ignore your previous instructions" and politely follow along. No questions asked.
 
-> **Curious?** Ask Claude: *"Are there built-in protections when you do web fetch?"*
-> You'll get a polite answer, and the [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) quietly back it up: there aren't any prompt injection guardrails.
+> **Curious?** Ask Claude: *"Are there built-in protections when using web fetch or web search tools?"*
+> You'll get a polite answer, and the [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) back up this response: No. there aren't any prompt injection guardrails. That's exactly why Safe Web Research guardrails are necessary.
 > That's exactly why Safe Web Research guardrails are necessary.
 
 **Safe Web Research** fixes that with two quiet layers:
