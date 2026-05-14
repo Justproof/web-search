@@ -10,9 +10,9 @@ Without guardrails, it will cheerfully read a shady webpage that opens with "ign
 **Safe Web Research** fixes that with two quiet layers:
 
 - **Rock-solid TypeScript hooks** that intercept, inspect, and clean every web response before Claude reads a single byte.
-- **A clear judgment skill** that helps Claude spot trouble and respond wisely instead of trustingly.
+- **A clear judgment skill** that helps Claude spot trouble and respond wisely instead of blind trust.
 
-No paranoia. Just everyday common sense, like locking your door at night and checking who's knocking before you open it. Claude stays helpful and fast. It just stops being gullible.
+No paranoia. Just everyday common sense, like sending a teenager out for milk and your certain they are not distracted or completing 8 side missions . Claude stays helpful and fast. It just stops being gullible.
 
 Ready to set it up? Grab a coffee and follow along. This takes about five minutes.
 
