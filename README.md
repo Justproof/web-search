@@ -5,12 +5,12 @@ Claude ships with a built-in web fetch tool. Handy. Also a little naive.
 Without guardrails, it will cheerfully read a shady webpage that opens with "ignore your previous instructions" and politely follow along. No questions asked.
 
 > **Curious?** Ask Claude: *"Are there built-in protections when you do web fetch?"*
-> You'll get a polite answer — and the [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) quietly back it up: there aren't any.
-> That's exactly why Safe Web Research exists.
+> You'll get a polite answer, and the [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) quietly back it up: there aren't any promt injection guardrails.
+> That's exactly why Safe Web Research guardrails are necessary.
 
 **Safe Web Research** fixes that with two quiet layers:
 
-- **Rock-solid TypeScript hooks** that intercept, inspect, and clean every web response before Claude reads a single byte.
+- **Custom TypeScript hooks** that intercept, inspect, and clean every web response before Claude reads a single byte.
 - **A clear judgment skill** that helps Claude spot trouble and respond wisely instead of blind trust.
 
 No paranoia. Just everyday common sense, like sending a teenager out for milk and your certain they are not distracted or completing 8 side missions . Claude stays helpful and fast. It just stops being gullible.
