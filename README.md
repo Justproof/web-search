@@ -2,7 +2,7 @@
 
 Claude has two built-in web tools <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool">Web Fetch</a> and <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool">Web Search</a> which are available to use in every Claude Code installation. With a fresh Claude install, the default permission mode asks for approval before each use. 
 
-Most people approve or switch defaultMode to "auto", which allows web searching with full permission. That's a reasonable choice, but consider this: not every site out there has good intentions for an AI crawler, and certain <a href="https://pcdrama.com/blog/ai-tarpits#why-web-admins-send-non-sense-to-ai">"Stay off my lawn / website" web admins</a> are punching back by relaying non-sense to bots, causing AI to struggle through AI tarpits.
+Most people approve or switch defaultMode to "auto", which allows web searching with full permission. Full auto is a reasonable choice, but consider what this means when using AI to search the internet: not every site out there has good intentions for an AI crawler, and certain <a href="https://pcdrama.com/blog/ai-tarpits#why-web-admins-send-non-sense-to-ai">"Stay off my lawn / website" web admins</a> are punching back by relaying non-sense to bots, causing AI to struggle through AI tarpits.
 Without guardrails, it will cheerfully read a shady webpage that opens with "ignore your previous instructions" and politely follow along. No questions asked.
 
 > **Curious?** Ask Claude: *"Are there built-in protections when you do web fetch?"*
