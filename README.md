@@ -1,8 +1,22 @@
 # safe-web-research
 
-A two-part safety layer for [Claude Code](https://claude.ai/code) that intercepts every web fetch before the model ever reads it.
+Claude ships with a built-in web fetch tool. Handy. Also a little naive.
 
-The web is full of pages that would love to tell Claude what to do. This package makes sure Claude isn't listening.
+Without guardrails, it will cheerfully read a shady webpage that opens with "ignore your previous instructions" and politely follow along. No questions asked.
+
+**Safe Web Research** fixes that with two quiet layers:
+
+- **Rock-solid TypeScript hooks** that intercept, inspect, and clean every web response before Claude reads a single byte.
+- **A clear judgment skill** that helps Claude spot trouble and respond wisely instead of trustingly.
+
+No paranoia. Just everyday common sense, like locking your door at night and checking who's knocking before you open it. Claude stays helpful and fast. It just stops being gullible.
+
+> **Curious?** Ask Claude: *"Are there built-in protections with web fetch?"*
+> The [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) confirm what you'll hear: there aren't. That's what this is for.
+
+Ready to set it up? Grab a coffee and follow along. This takes about five minutes.
+
+**[github.com/Justproof/web-search](https://github.com/Justproof/web-search)**
 
 ---
 
