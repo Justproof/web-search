@@ -4,8 +4,9 @@ Claude ships with a built-in web fetch tool. Handy. Also a little naive.
 
 Without guardrails, it will cheerfully read a shady webpage that opens with "ignore your previous instructions" and politely follow along. No questions asked.
 
-> **Curious?** Ask Claude: *"Are there built-in protections with web fetch?"*
-> The [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) confirm what you'll hear: there aren't. That's what this is for.
+> **Curious?** Ask Claude: *"Are there built-in protections when you do web fetch?"*
+> You'll get a polite answer — and the [official docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool) quietly back it up: there aren't any.
+> That's exactly why Safe Web Research exists.
 
 **Safe Web Research** fixes that with two quiet layers:
 
