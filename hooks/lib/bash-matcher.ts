@@ -1,16 +1,45 @@
 // Bash command matcher (FR-2). Parse via shell-quote AST — never regex on
-// the raw command string. Detect curl / wget / http / lynx / w3m invocations
-// (including inside bash -c "…", pipelines, env-prefix, command substitution,
-// xargs). Rewrite to pipe stdout through ~/.claude/bin/claude-sanitize.
+// the raw command string. Detects two categories:
+//   1. Dedicated CLI HTTP tools (curl, wget, aria2c, etc.) — confident detection.
+//   2. Interpreter inline code (python3 -c "...https://...") — partial detection;
+//      script files (python3 script.py) are opaque and not intercepted.
 
 import { parse, quote } from "shell-quote";
 
-const FETCH_BINS = new Set(["curl", "wget", "http", "lynx", "w3m"]);
+// Dedicated CLI HTTP tools — primary purpose is fetching URLs.
+const FETCH_BINS = new Set([
+    "curl",
+    "wget",
+    "wget2",
+    "http",
+    "httpie",
+    "aria2c",
+    "lynx",
+    "w3m",
+]);
+
+// Interpreter binaries that can make HTTP requests via -c/-e inline code.
+// We only match these when the inline argument contains a URL pattern — we
+// cannot intercept network calls inside script files (python3 script.py etc.).
+const INTERPRETER_BINS = new Set([
+    "python",
+    "python3",
+    "node",
+    "nodejs",
+    "ruby",
+    "perl",
+    "php",
+]);
+
+const INLINE_FLAG = new Set(["-c", "-e"]);
+const INLINE_URL_RE = /https?:\/\//i;
+
 const SANITIZER_BIN = `${process.env.HOME}/.claude/bin/claude-sanitize`;
 
 export interface BashMatch {
     matched: boolean;
     bins: string[];
+    interpreterDetected: boolean;
     rewrittenCommand: string | null;
     parseFailed: boolean;
     reason: string | null;
@@ -66,6 +95,21 @@ const containsFetchBin = (
                 return { found: nextBase, afterEnv: trimmed };
             }
             break;
+        }
+    }
+    // Interpreter inline-code invocations: python3 -c "...", node -e "...", etc.
+    // Only matches when the inline argument contains a URL — we cannot intercept
+    // network calls inside script files (python3 script.py is opaque to this hook).
+    if (INTERPRETER_BINS.has(basename)) {
+        for (let i = 1; i < trimmed.length - 1; i++) {
+            const flag = trimmed[i];
+            if (typeof flag !== "string" || !INLINE_FLAG.has(flag)) {
+                continue;
+            }
+            const code = trimmed[i + 1];
+            if (typeof code === "string" && INLINE_URL_RE.test(code)) {
+                return { found: basename, afterEnv: trimmed };
+            }
         }
     }
     return { found: null, afterEnv: trimmed };
@@ -163,6 +207,7 @@ export const matchBashCommand = (raw: string): BashMatch => {
         return {
             matched: false,
             bins: [],
+            interpreterDetected: false,
             rewrittenCommand: null,
             parseFailed: true,
             reason: (err as Error).message,
@@ -189,6 +234,7 @@ export const matchBashCommand = (raw: string): BashMatch => {
                 return {
                     matched: false,
                     bins: [],
+                    interpreterDetected: false,
                     rewrittenCommand: null,
                     parseFailed: true,
                     reason: "bash -c inner unparseable",
@@ -204,11 +250,14 @@ export const matchBashCommand = (raw: string): BashMatch => {
         return {
             matched: false,
             bins: [],
+            interpreterDetected: false,
             rewrittenCommand: null,
             parseFailed: false,
             reason: null,
         };
     }
+
+    const interpreterDetected = dedup.some((b) => INTERPRETER_BINS.has(b));
 
     // Conservative rewrite: wrap the whole command with a pipe through claude-sanitize.
     // Subshell containment ensures pipefail / set -e in the parent shell don't
@@ -221,6 +270,7 @@ export const matchBashCommand = (raw: string): BashMatch => {
     return {
         matched: true,
         bins: dedup,
+        interpreterDetected,
         rewrittenCommand: rewritten,
         parseFailed: false,
         reason: null,
