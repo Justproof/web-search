@@ -26,7 +26,7 @@ Ready to set it up? Grab a coffee and follow along. This takes about five minute
 
 | Component | What it does |
 | --- | --- |
-| **Hooks** (`PreToolUse` + `PostToolUse`) | Intercept `WebFetch`, `WebSearch`, `curl`/`wget` in Bash, and browser MCP tools. Check `robots.txt`, detect cloaking and injection attempts, compute risk signals, and wrap all web content in `<untrusted_source>` tags before Claude reads a single byte. |
+| **Hooks** (`PreToolUse` + `PostToolUse`) | Intercept `WebFetch`, `WebSearch`, `curl`/`wget`/`wget2`/`aria2c`/`httpie` in Bash, interpreter one-liners (Python, Node, Ruby, Perl, PHP), and browser MCP tools. Check `robots.txt`, detect cloaking and injection attempts, compute risk signals, and wrap all web content in `<untrusted_source>` tags before Claude reads a single byte. |
 | **Skill** (`safe-web-research`) | Gives Claude the judgment rules: when to abort a source, how to classify risk signals, what to emit in `<safe_research_summary>` blocks, and how to handle corroboration and output discipline. |
 
 The hooks handle mechanics. The skill handles reasoning. Neither can be argued out of its job by a web page.
@@ -122,7 +122,7 @@ Add to `~/.claude/settings.json` (merge with any existing `hooks` block):
 }
 ```
 
-`PreToolUse` includes `Bash` so `curl`/`wget` calls get rewritten to pipe through `claude-sanitize`. `PostToolUse` covers structured web tool responses only.
+`PreToolUse` includes `Bash` so `curl`, `wget`, `wget2`, `aria2c`, `httpie`, and interpreter one-liners (Python/Node/Ruby/Perl/PHP with an inline URL) get rewritten to pipe through `claude-sanitize`. `PostToolUse` covers structured web tool responses only.
 
 Hooks are fail-open — a hook crash never blocks Claude Code.
 
@@ -221,15 +221,16 @@ A developer has been running Claude in auto mode for two weeks and just updated 
 Every web fetch goes through two checkpoints:
 
 **Pre-hook** — before the request:
-- URL-level checks: homoglyphs, non-ASCII hostnames, embedded credentials, zero-width chars
-- `robots.txt` fetch and cache (24h TTL); disallowed AI user-agents skip the fetch entirely
-- Bash command rewriting: `curl`/`wget` pipes get redirected through `claude-sanitize`
+- URL-level checks: homoglyphs, non-ASCII hostnames, embedded credentials, zero-width chars in host or path, multi-`@` authority tricks — hard deny, no fetch
+- `robots.txt` fetch and cache (24h TTL); advisory reminder if the path is disallowed for AI agents — the hook does not block, Claude decides whether to proceed
+- Bash command rewriting: `curl`, `wget`, `wget2`, `aria2c`, `httpie`, `lynx`, `w3m`, and interpreter one-liners (Python/Node/Ruby/Perl/PHP with inline URL) get piped through `claude-sanitize`
+- Trusted domains in the `meta_allowlist` have a single `injection_phrase` signal downgraded from Critical abort to advisory — useful for security research and documentation sites
 
 **Post-hook** — after the response:
-- Strips scripts, hidden elements, event handlers, and zero-width characters (in `enforce` mode)
+- Strips scripts, hidden elements, event handlers, and zero-width characters (in `enforce` mode); `<header>` and `<footer>` tags are intentionally preserved — they carry bylines, dates, and citations inside articles that stripping would destroy
 - Computes risk signals (injection phrases, cloaking, oversized responses, tarpit patterns)
-- Runs a parallel refetch to detect cloaking (the page serving different content to Claude than to a browser)
-- Wraps everything in `<untrusted_source>` with signal metadata
+- Runs a parallel refetch to detect cloaking (the page serving different content to Claude than to a browser); reports simhash distance and threshold in the advisory
+- Wraps everything in `<untrusted_source>` with signal metadata; in `log` mode the wrapper includes a `rules_pending` attribute listing what would have been stripped
 
 **Skill** — when Claude reads the result:
 - Abort rules fire before any analysis, quoting, or downstream actions
@@ -264,8 +265,8 @@ Tier assignments live in `skills/safe-web-research/risk-tiers.json` and can be o
 
 | Mode | Behavior |
 | --- | --- |
-| `log` (default) | Computes signals and wraps content, but passes the **original** bytes through. Good for a soak period to understand signal frequency before enabling stripping. |
-| `enforce` | Returns sanitized + wrapped responses. Scripts, hidden elements, event handlers, and zero-width chars are stripped. |
+| `log` (default) | Computes signals and wraps content, but passes the **original** bytes through. The wrapper includes a `rules_pending` attribute listing what would have been stripped — Claude knows stripping is pending but the raw content is still present. Good for a soak period to understand signal frequency before enabling stripping. |
+| `enforce` | Returns sanitized + wrapped responses. Scripts, style blocks, iframes, hidden elements, event handlers, boilerplate tags (`nav`, `noscript`, `svg`, `aside`), and zero-width chars are stripped. `<header>` and `<footer>` are preserved. |
 
 Switch modes via environment variable:
 
