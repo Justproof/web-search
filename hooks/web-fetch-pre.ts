@@ -113,7 +113,6 @@ const parseDisallow = (robotsTxt: string): string[] => {
         "claudebot",
         "anthropic-ai",
         "claude-web",
-        "gptbot",
     ]);
     const out: string[] = [];
     for (const g of groups) {
