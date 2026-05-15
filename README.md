@@ -152,6 +152,70 @@ You should see the response wrapped in `<untrusted_source url="https://example.c
 
 ---
 
+## Real-world scenarios
+
+### The poisoned package README
+
+A developer asks Claude to evaluate an unfamiliar npm package before adding it as a dependency. Claude fetches the package page, the linked GitHub repo, and a few Stack Overflow threads. One of those pages — maybe the package's own README, maybe a tutorial — opens with content designed to redirect Claude's behavior. Without guardrails, Claude reads it and follows along. With the hook, every response is wrapped in `<untrusted_source>` before Claude reads a byte, and injection phrases fire a Critical signal that aborts the source before Claude quotes a word of it. The research completes. The poisoned page has zero influence on the output.
+
+```
+what does the "event-stream" npm package do and is it safe to use?
+```
+
+---
+
+### Claude goes somewhere you didn't send it
+
+A developer running Claude in full-auto mode asks for a multi-source research task. Claude fetches a page that contains instructions telling it to follow a link, fetch a second URL, or install a package to "see the full content." Without guardrails, Claude may comply — it has no reason not to. With abort rules loaded, a source that tries to redirect Claude's tool use is aborted on the injection signal before any downstream action happens. The task continues from clean sources. The detour never occurs.
+
+```
+compare the architecture of three popular background job libraries for Node.js
+```
+
+---
+
+### A link arrives from somewhere you don't fully trust
+
+A URL shows up in a Slack message, a bug report, or a client email. Before Claude makes any network request, the pre-hook inspects the raw URL string — not the parsed version, the raw string. Embedded credentials, lookalike Unicode hostname characters, zero-width chars in the path, and multi-`@` authority tricks are refused before a single byte leaves the machine. The attack surface that exists before the page even loads is closed entirely.
+
+```
+fetch https://user:pass@httpbin.org/get and summarize it
+```
+
+No request is made:
+
+> `[safe-web-research] FR-27 blocked: embedded credentials in URL (user:pass@ pattern). Fetch refused. Do not retry this URL.`
+
+---
+
+### A web page tells Claude to run a shell command
+
+Claude is helping debug a build failure and fetches a documentation page. That page contains instructions telling Claude to run a curl command to download a fix script. Without guardrails, Claude runs it — the script's output arrives in context as trusted text. With the hook, the Bash command is intercepted before execution and rewritten to pipe stdout through `claude-sanitize`. The download still happens. But the output arrives wrapped in `<untrusted_source>`, labeled as untrusted, and Claude treats it accordingly instead of executing its contents.
+
+The rewrite is visible in the approval dialog:
+
+`( curl https://example.com/fix.sh ) | ~/.claude/bin/claude-sanitize --url=bash-stdin`
+
+Works the same for `wget`, `wget2`, `aria2c`, `httpie`, and Python/Node/Ruby one-liners with a URL in the inline code.
+
+---
+
+### Reviewing what got through before you tightened thresholds
+
+A developer has been running Claude in auto mode for two weeks and just updated `risk-tiers.json` to lower the elevated-signal abort threshold. Before deciding whether the change is right, they replay history against the new config to see which past fetches would now be aborted that weren't before. Two fetches from last Tuesday would have been caught — both from a domain that has since shown up in public blocklists. The threshold change is validated and committed.
+
+```bash
+# see sessions, blocked domains, robots cache, and recent signal activity
+~/.claude/bin/claude-sanitize status
+
+# compare stored decisions against current config
+~/.claude/bin/claude-sanitize replay --last=50
+```
+
+`stored_abort` is what the hook decided at fetch time. `current_abort` is what it would decide now. Rows that disagree are the concrete cost or benefit of the config change — before it affects a live session.
+
+---
+
 ## How it works
 
 Every web fetch goes through two checkpoints:
