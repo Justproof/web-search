@@ -145,6 +145,74 @@ const robotsDisallowsPath = (
 const renderReminder = (lines: string[]): string =>
     `<system-reminder>\n${lines.join("\n")}\n</system-reminder>`;
 
+const ZERO_WIDTH_URL_RE = /[​‌‍⁠᠎﻿]/;
+
+// Extract the raw hostname from the URL string before URL parsing normalises
+// Unicode to punycode — homoglyph attacks are invisible after normalisation.
+const extractRawHost = (urlStr: string): string | null => {
+    const m = /^[a-z][a-z0-9+\-.]*:\/\/([^/?#]*)/i.exec(urlStr);
+    if (!m) {
+        return null;
+    }
+    const authority = m[1]!;
+    const atIdx = authority.lastIndexOf("@");
+    const hostPort = atIdx >= 0 ? authority.slice(atIdx + 1) : authority;
+    if (hostPort.startsWith("[")) {
+        const end = hostPort.indexOf("]");
+        return end >= 0 ? hostPort.slice(0, end + 1) : null;
+    }
+    return hostPort.split(":")[0] ?? null;
+};
+
+// FR-27: URL-level adversarial input checks. Returns a reason string if the
+// URL should be refused, null if clean. Runs before any bytes are pulled.
+const checkUrlAdversarial = (urlStr: string): string | null => {
+    let parsed: URL;
+    try {
+        parsed = new URL(urlStr);
+    } catch {
+        return null;
+    }
+
+    // Embedded credentials (phishing / SSRF vector)
+    if (parsed.username || parsed.password) {
+        return "embedded credentials in URL (user:pass@ pattern)";
+    }
+
+    // Multiple @ in authority — parsers disagree on which part is the host
+    const afterScheme = urlStr.slice(urlStr.indexOf("://") + 3);
+    const rawAuthority = afterScheme.split(/[/?#]/)[0] ?? "";
+    if ((rawAuthority.match(/@/g) ?? []).length > 1) {
+        return "multiple @ characters in URL authority";
+    }
+
+    // Zero-width chars in host or path
+    if (
+        ZERO_WIDTH_URL_RE.test(parsed.hostname) ||
+        ZERO_WIDTH_URL_RE.test(parsed.pathname)
+    ) {
+        return "zero-width characters in URL host or path";
+    }
+
+    // Non-ASCII in hostname — inspect the raw string before punycode normalisation
+    // hides the homoglyph. Any non-ASCII label without an explicit xn-- prefix is refused.
+    const rawHost = extractRawHost(urlStr);
+    if (rawHost !== null) {
+        for (const label of rawHost.split(".")) {
+            if (label.startsWith("xn--")) {
+                continue;
+            }
+            for (let i = 0; i < label.length; i++) {
+                if (label.charCodeAt(i) > 127) {
+                    return `non-ASCII characters in hostname label "${label}" — possible homoglyph/IDN attack`;
+                }
+            }
+        }
+    }
+
+    return null;
+};
+
 const handleWebUrlTool = async (
     input: PreToolUseInput,
     url: string,
@@ -154,6 +222,18 @@ const handleWebUrlTool = async (
     const domain = extractDomain(url);
     if (!domain) {
         return {};
+    }
+
+    // FR-27: URL-level adversarial checks — deny before any fetch happens.
+    const adversarialReason = checkUrlAdversarial(url);
+    if (adversarialReason) {
+        return {
+            hookSpecificOutput: {
+                hookEventName: "PreToolUse",
+                permissionDecision: "deny",
+                permissionDecisionReason: `[safe-web-research] FR-27 blocked: ${adversarialReason}. Fetch refused. Do not retry this URL.`,
+            },
+        };
     }
 
     // Per-session counter (FR-5). Subagent fetches share the parent session_id
