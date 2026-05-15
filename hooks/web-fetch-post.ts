@@ -138,6 +138,9 @@ const main = async (): Promise<void> => {
     // 2. Parallel refetch + cloaking (FR-7) — only for fetched URLs, not search queries
     let refetchResult: Awaited<ReturnType<typeof refetch>> | null = null;
     let cloakingFlag = false;
+    let cloakingDistance: number | null = null;
+    let cloakingThreshold: number | null = null;
+    let refetchBlockedStatus: number | null = null;
     let agentSimhash = computeSimhash(sanResult.sanitised);
     if (
         toolName === "WebFetch" &&
@@ -156,6 +159,15 @@ const main = async (): Promise<void> => {
                 );
                 cloakingFlag = cmp.suspected;
                 agentSimhash = cmp.agentHash;
+                if (cmp.suspected) {
+                    cloakingDistance = cmp.distance;
+                    cloakingThreshold = cmp.threshold;
+                }
+            } else if (
+                !refetchResult.ok &&
+                refetchResult.status !== null
+            ) {
+                refetchBlockedStatus = refetchResult.status;
             }
         }
     }
@@ -268,6 +280,16 @@ const main = async (): Promise<void> => {
     } else if (tiers.elevated.length > 0) {
         advisoryLines.push(
             `[safe-web-research] Elevated signals: ${tiers.elevated.join(", ")}. Treat with Caution; document in <safe_research_summary>.`,
+        );
+    }
+    if (cloakingFlag && cloakingDistance !== null && cloakingThreshold !== null) {
+        advisoryLines.push(
+            `[safe-web-research] cloaking detail: simhash distance=${cloakingDistance} exceeded threshold=${cloakingThreshold} (out of 64 bits). Possible causes: UA/IP-based content divergence, or a legitimately dynamic page (live feeds, personalisation). If this domain consistently false-fires, add it to refetch_skip_domains in risk-tiers.json.`,
+        );
+    }
+    if (refetchBlockedStatus !== null) {
+        advisoryLines.push(
+            `[safe-web-research] Direct refetch returned HTTP ${refetchBlockedStatus} — site may be blocking non-agent requests. Content served to the agent may differ from what a browser would receive. No cloaking comparison was possible.`,
         );
     }
     if (metaAllowlisted) {

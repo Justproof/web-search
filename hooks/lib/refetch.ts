@@ -130,6 +130,7 @@ export const compareForCloaking = (
     return {
         suspected: distance > cloakingThreshold,
         distance,
+        threshold: cloakingThreshold,
         agentHash,
         refetchHash,
     };
