@@ -55,6 +55,12 @@ export const loadRiskTiersConfig = (
     return _config;
 };
 
+// Reset the module-level config cache. Call this between tests that load
+// different risk-tiers.json fixtures — mirrors closeDb() in state.ts.
+export const resetConfigCache = (): void => {
+    _config = null;
+};
+
 export const thresholdsForDomain = (
     domain: string,
     cfg: RiskTiersConfig,
