@@ -114,6 +114,7 @@ export const compareForCloaking = (
 ): {
     suspected: boolean;
     distance: number;
+    threshold: number;
     agentHash: string;
     refetchHash: string;
 } => {
