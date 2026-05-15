@@ -33,6 +33,9 @@ export interface RiskTiersConfig {
     >;
     refetch_skip_domains: string[];
     injection_phrases: string[];
+    meta_allowlist?: {
+        hosts: string[];
+    };
 }
 
 const DEFAULT_CONFIG_PATH = `${process.env.HOME}/.claude/skills/safe-web-research/risk-tiers.json`;
@@ -179,6 +182,16 @@ export const computeSignals = (ctx: SignalContext): SignalResult => {
     }
 
     return { fired, detail };
+};
+
+// FR-28: returns true if domain matches a meta-allowlist host or any registrable parent.
+// e.g. "www.owasp.org" matches allowlist entry "owasp.org".
+export const isMetaAllowlisted = (
+    domain: string,
+    cfg: RiskTiersConfig,
+): boolean => {
+    const hosts = cfg.meta_allowlist?.hosts ?? [];
+    return hosts.some((h) => domain === h || domain.endsWith("." + h));
 };
 
 export const partitionByTier = (

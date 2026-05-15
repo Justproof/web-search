@@ -22,6 +22,7 @@ import {
 import {
     computeSignals,
     computeSimhash,
+    isMetaAllowlisted,
     loadRiskTiersConfig,
     partitionByTier,
 } from "./lib/signals.ts";
@@ -179,6 +180,21 @@ const main = async (): Promise<void> => {
     }
     const tiers = partitionByTier(signals.fired, cfg);
 
+    // FR-28: downgrade injection_phrase from Critical to Elevated when it is the
+    // only Critical signal and the domain is on the meta-allowlist (security-research
+    // sources like owasp.org enumerate canonical injection phrasings as examples).
+    // Any additional Critical signal still aborts unconditionally.
+    let metaAllowlisted = false;
+    if (
+        tiers.critical.length === 1 &&
+        tiers.critical[0] === "injection_phrase" &&
+        isMetaAllowlisted(domain, cfg)
+    ) {
+        metaAllowlisted = true;
+        tiers.elevated.push("injection_phrase");
+        tiers.critical.splice(0, 1);
+    }
+
     // 4. fetch_log row (FR-13)
     const fetchedAt = new Date().toISOString();
     const wouldAbort =
@@ -250,6 +266,11 @@ const main = async (): Promise<void> => {
     } else if (tiers.elevated.length > 0) {
         advisoryLines.push(
             `[safe-web-research] Elevated signals: ${tiers.elevated.join(", ")}. Treat with Caution; document in <safe_research_summary>.`,
+        );
+    }
+    if (metaAllowlisted) {
+        advisoryLines.push(
+            `[safe-web-research] injection_phrase downgraded Critical→Elevated (FR-28): ${domain} is on the meta-allowlist. This source discusses injection patterns as subject matter. Annotate your <safe_research_summary> with meta_allowlisted: true.`,
         );
     }
     if (mode === "log") {
