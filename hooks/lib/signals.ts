@@ -281,7 +281,17 @@ const mimeFamilyMatch = (declared: string, sniffed: string): boolean => {
 
 export const computeSimhash = (s: string): string => {
     // 64-bit simhash on shingled tokens. Returns hex string.
-    const tokens = s.toLowerCase().match(/[a-z0-9]{2,}/g) ?? [];
+    // Ideographic chars (CJK and extensions via \p{Ideographic}) and Japanese
+    // syllabaries (Hiragana U+3040-30FF) are tokenised individually — each
+    // character carries word-level meaning. Hangul syllables (U+AC00-D7FF)
+    // are similarly individual units. All other Unicode letters require 2+
+    // characters so single-char ASCII/Latin noise doesn't dominate the hash.
+    const tokens =
+        s
+            .toLowerCase()
+            .match(
+                /\p{Ideographic}|[぀-ヿ가-퟿]|\p{L}{2,}/gu,
+            ) ?? [];
     if (tokens.length === 0) {
         return "0".repeat(16);
     }
