@@ -241,14 +241,16 @@ const main = async (): Promise<void> => {
     );
 
     // 5. Wrapper emission (FR-9 / FR-16)
-    const bodyForAgent = mode === "enforce" ? sanResult.sanitised : body;
-    const enforceResult =
+    // The wrap() call receives mode so it can set rules_applied="" and rules_pending="..."
+    // in log mode rather than falsely claiming sanitisation occurred.
+    const resultForWrap =
         mode === "enforce" ? sanResult : { ...sanResult, sanitised: body };
     const wrapped = wrap({
         url: url || `tool:${toolName}`,
         fetchedAt,
         riskSignals: signals.fired,
-        result: enforceResult,
+        result: resultForWrap,
+        mode: mode as "log" | "enforce",
     });
 
     // Build agent-visible context blob

@@ -239,22 +239,36 @@ export interface WrapOptions {
     fetchedAt?: string;
     riskSignals?: string[];
     result: SanitiseResult;
+    mode?: "log" | "enforce";
 }
 
 export const wrap = (opts: WrapOptions): string => {
     const fetchedAt = opts.fetchedAt ?? new Date().toISOString();
     const signals = (opts.riskSignals ?? []).join(",");
-    const rules = opts.result.rulesApplied.join(",");
-    const attrs = [
+    const mode = opts.mode ?? "enforce";
+
+    // rules_applied = what was actually stripped from the body the model reads.
+    // In log mode nothing is stripped, so rules_applied is empty and the would-apply
+    // list moves to rules_pending — the model must not treat the body as sanitised.
+    const rulesApplied =
+        mode === "enforce" ? opts.result.rulesApplied.join(",") : "";
+    const rulesPending =
+        mode === "log" ? opts.result.rulesApplied.join(",") : "";
+
+    const attrParts = [
         `url="${escapeAttr(opts.url)}"`,
         `fetched_at="${fetchedAt}"`,
         `sanitiser_version="${SANITISER_VERSION}"`,
-        `rules_applied="${rules}"`,
+        `mode="${mode}"`,
+        `rules_applied="${rulesApplied}"`,
         `original_bytes="${opts.result.originalBytes}"`,
         `content_sha256="${opts.result.contentSha256}"`,
         `risk_signals="${signals}"`,
-    ].join(" ");
-    return `<untrusted_source ${attrs}>\n${opts.result.sanitised}\n</untrusted_source>`;
+    ];
+    if (rulesPending) {
+        attrParts.push(`rules_pending="${rulesPending}"`);
+    }
+    return `<untrusted_source ${attrParts.join(" ")}>\n${opts.result.sanitised}\n</untrusted_source>`;
 };
 
 const escapeAttr = (s: string): string =>
