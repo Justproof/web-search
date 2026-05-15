@@ -53,14 +53,11 @@ const JS_URI_RE =
 const DATA_URI_NON_IMAGE_RE =
     /(href|src|action|formaction)\s*=\s*("data:(?!image\/)[^"]*"|'data:(?!image\/)[^']*'|data:(?!image\/)[^\s>]+)/gi;
 
-const BOILERPLATE_TAGS = [
-    "nav",
-    "header",
-    "footer",
-    "noscript",
-    "svg",
-    "aside",
-];
+// header and footer are intentionally absent: HTML5 allows them nested inside
+// articles where they carry titles, bylines, dates, citations, and footnotes.
+// A regex-based stripper cannot distinguish page-level site chrome from
+// article-level metadata, so stripping them destroys real content.
+const BOILERPLATE_TAGS = ["nav", "noscript", "svg", "aside"];
 
 const HIDDEN_TAG_OPEN_RE =
     /<([a-z][a-z0-9]*)\b([^>]*?)\b(?:style\s*=\s*("[^"]*?(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0)[^"]*?"|'[^']*?(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0)[^']*?')|aria-hidden\s*=\s*("true"|'true'))[^>]*>/gi;
