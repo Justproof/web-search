@@ -78,7 +78,7 @@ const replay = async (args: Map<string, string>): Promise<void> => {
     const db = getDb();
     const rows = db
         .prepare(
-            `SELECT id, url, domain, fetched_at, content_sha256, risk_signals, sanitiser_version
+            `SELECT id, url, domain, fetched_at, content_sha256, risk_signals, sanitiser_version, abort_decision
        FROM fetch_log WHERE fetched_at >= ? ORDER BY fetched_at ASC`,
         )
         .all(since) as {
@@ -89,46 +89,62 @@ const replay = async (args: Map<string, string>): Promise<void> => {
         content_sha256: string | null;
         risk_signals: string;
         sanitiser_version: string;
+        abort_decision: number | null;
     }[];
 
-    let wouldFireNow = 0;
-    let usedToFireOnly = 0;
+    let wouldAbortNowOnly = 0;
+    let usedToAbortOnly = 0;
     let unchanged = 0;
-    const newSignalCounts = new Map<string, number>();
-    const oldSignalCounts = new Map<string, number>();
+    let legacyUnknown = 0;
+
+    const signalCountsAll = new Map<string, number>();
+    const signalCountsCurrent = new Map<string, number>();
+    const tierChanges: { signal: string; was: string; now: string }[] = [];
 
     const cfg = loadRiskTiersConfig();
     for (const row of rows) {
         if (versionFilter && row.sanitiser_version !== versionFilter) {
             continue;
         }
-        const oldSignals = row.risk_signals
+        const storedSignals = row.risk_signals
             ? row.risk_signals.split(",").filter(Boolean)
             : [];
-        const oldTiers = partitionByTier(oldSignals, cfg);
+        const currentTiers = partitionByTier(storedSignals, cfg);
 
-        for (const s of oldSignals) {
-            oldSignalCounts.set(s, (oldSignalCounts.get(s) ?? 0) + 1);
-        }
-        for (const s of oldSignals) {
-            const def = cfg.signals[s];
-            if (!def) {
-                continue;
+        for (const s of storedSignals) {
+            signalCountsAll.set(s, (signalCountsAll.get(s) ?? 0) + 1);
+            if (cfg.signals[s]) {
+                signalCountsCurrent.set(
+                    s,
+                    (signalCountsCurrent.get(s) ?? 0) + 1,
+                );
             }
-            newSignalCounts.set(s, (newSignalCounts.get(s) ?? 0) + 1);
         }
+
         const wouldAbortNow =
-            oldTiers.critical.length > 0 ||
-            oldTiers.elevated.length >= cfg.thresholds.abort_on_elevated_count;
-        const wouldHaveAborted =
-            oldTiers.critical.length > 0 ||
-            oldTiers.elevated.length >= cfg.thresholds.abort_on_elevated_count;
+            currentTiers.critical.length > 0 ||
+            currentTiers.elevated.length >= cfg.thresholds.abort_on_elevated_count;
+
+        if (row.abort_decision === null) {
+            legacyUnknown++;
+            continue;
+        }
+
+        const wouldHaveAborted = row.abort_decision === 1;
+
         if (wouldAbortNow && !wouldHaveAborted) {
-            wouldFireNow++;
+            wouldAbortNowOnly++;
         } else if (!wouldAbortNow && wouldHaveAborted) {
-            usedToFireOnly++;
+            usedToAbortOnly++;
         } else {
             unchanged++;
+        }
+    }
+
+    for (const [signal] of signalCountsAll) {
+        const currentDef = cfg.signals[signal];
+        if (!currentDef) {
+            tierChanges.push({ signal, was: "defined", now: "removed/unknown" });
         }
     }
 
@@ -138,15 +154,20 @@ const replay = async (args: Map<string, string>): Promise<void> => {
                 since,
                 version_filter: versionFilter,
                 rows_examined: rows.length,
+                rows_with_abort_decision: rows.length - legacyUnknown,
+                legacy_unknown: legacyUnknown,
                 sanitiser_version_now: SANITISER_VERSION,
                 drift: {
-                    would_abort_now_only: wouldFireNow,
-                    used_to_abort_only: usedToFireOnly,
+                    would_abort_now_only: wouldAbortNowOnly,
+                    used_to_abort_only: usedToAbortOnly,
                     unchanged,
                 },
-                signal_counts_old: Object.fromEntries(oldSignalCounts),
-                signal_counts_new: Object.fromEntries(newSignalCounts),
-                note: "Tier-reclassification drift only; full body re-sanitisation requires CLAUDE_SANITISER_DEBUG=1 captures or on-demand refetch.",
+                signal_counts_all: Object.fromEntries(signalCountsAll),
+                signal_counts_current_config: Object.fromEntries(
+                    signalCountsCurrent,
+                ),
+                deprecated_or_renamed_signals: tierChanges,
+                note: "Abort-decision drift requires abort_decision column (rows written before the fix show as legacy_unknown). Full body re-sanitisation requires CLAUDE_SANITISER_DEBUG=1 captures.",
             },
             null,
             2,

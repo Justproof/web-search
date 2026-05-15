@@ -181,6 +181,9 @@ const main = async (): Promise<void> => {
 
     // 4. fetch_log row (FR-13)
     const fetchedAt = new Date().toISOString();
+    const wouldAbort =
+        tiers.critical.length > 0 ||
+        tiers.elevated.length >= cfg.thresholds.abort_on_elevated_count;
     try {
         insertFetchLog({
             url,
@@ -193,6 +196,7 @@ const main = async (): Promise<void> => {
             sanitiser_version: SANITISER_VERSION,
             session_id: sessionId,
             simhash: agentSimhash,
+            abort_decision: wouldAbort,
         });
     } catch (err) {
         appendFileSync(

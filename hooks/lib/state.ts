@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS fetch_log (
   strip_diff TEXT,
   sanitiser_version TEXT,
   session_id TEXT,
-  simhash TEXT
+  simhash TEXT,
+  abort_decision INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_fetch_log_domain ON fetch_log(domain);
@@ -74,6 +75,11 @@ export const getDb = (): Database => {
     db.exec("PRAGMA busy_timeout = 3000");
     db.exec("PRAGMA synchronous = NORMAL");
     db.exec(SCHEMA);
+    try {
+        db.exec("ALTER TABLE fetch_log ADD COLUMN abort_decision INTEGER");
+    } catch {
+        // column already exists on databases created before this migration
+    }
     _db = db;
     return db;
 };
@@ -203,14 +209,17 @@ export interface FetchLogRow {
     sanitiser_version: string;
     session_id: string | null;
     simhash: string | null;
+    abort_decision: boolean | null;
 }
 
 export const insertFetchLog = (row: FetchLogRow): void => {
     const db = getDb();
+    const abortInt =
+        row.abort_decision === null ? null : row.abort_decision ? 1 : 0;
     db.prepare(
         `INSERT INTO fetch_log
-       (url, domain, fetched_at, content_sha256, original_bytes, risk_signals, strip_diff, sanitiser_version, session_id, simhash)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (url, domain, fetched_at, content_sha256, original_bytes, risk_signals, strip_diff, sanitiser_version, session_id, simhash, abort_decision)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
         row.url,
         row.domain,
@@ -222,6 +231,7 @@ export const insertFetchLog = (row: FetchLogRow): void => {
         row.sanitiser_version,
         row.session_id,
         row.simhash,
+        abortInt,
     );
 };
 
