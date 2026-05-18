@@ -215,15 +215,17 @@ Or set it only for Claude Code sessions by adding it to the `env` block in `~/.c
 
 ---
 
-## Optional: debug mode
+## Audit logging
 
-To log full request/response bodies for auditing (large output — use sparingly):
+By default, every fetch writes a full record to `~/.claude/safe-web-research/fetch-log.jsonl`, including the raw `full_body` and `sanitised_body`. Hashes and risk signals tell you *whether* a fetch looked suspicious; the bodies let you go back and read what the agent was actually told. That second log is what feeds anomaly detection and catches indirect prompt injection after the fact.
+
+Expect the file to grow steadily — rotate or prune on a schedule that fits your disk budget.
+
+To route logs to a separate `fetch-log-debug.jsonl` file (useful for isolating a specific investigation):
 
 ```bash
 export CLAUDE_SANITISER_DEBUG=1
 ```
-
-Debug logs write to `~/.claude/safe-web-research/fetch-log-debug.jsonl`.
 
 ---
 

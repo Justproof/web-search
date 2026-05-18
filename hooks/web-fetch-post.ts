@@ -245,9 +245,8 @@ const main = async (): Promise<void> => {
             strip_diff: sanResult.diffSummary,
             sanitiser_version: SANITISER_VERSION,
             mode,
-            ...(debug
-                ? { full_body: body, sanitised_body: sanResult.sanitised }
-                : {}),
+            full_body: body,
+            sanitised_body: sanResult.sanitised,
         },
         debug,
     );
