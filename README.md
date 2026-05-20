@@ -35,6 +35,8 @@ The hooks handle mechanics. The skill handles reasoning. Neither can be argued o
 
 ## Prerequisites
 
+**[Claude Code](https://code.claude.com/docs/en/quickstart)** — install and sign in first. The hooks and skill in this repo plug into a working Claude Code setup; if `~/.claude/` doesn't exist yet, run Claude Code at least once before continuing.
+
 **[Bun](https://bun.sh)** — the hooks are TypeScript and run with `bun run` directly (no compile step).
 
 ```bash
@@ -47,96 +49,24 @@ Verify: `bun --version` should print `1.x` or higher.
 
 ## Install
 
-### 1. Copy files
-
-From inside this repo:
+One line. Checks for Bun, grabs the repo, drops files into `~/.claude/`, merges your `settings.json`, and appends the skill reference to `~/.claude/CLAUDE.md`. Anything it touches gets a timestamped backup first.
 
 ```bash
-mkdir -p ~/.claude/hooks/lib
-mkdir -p ~/.claude/skills/safe-web-research
-mkdir -p ~/.claude/bin
-
-cp hooks/package.json          ~/.claude/hooks/package.json
-cp hooks/web-fetch-pre.ts      ~/.claude/hooks/web-fetch-pre.ts
-cp hooks/web-fetch-post.ts     ~/.claude/hooks/web-fetch-post.ts
-cp hooks/lib/bash-matcher.ts   ~/.claude/hooks/lib/bash-matcher.ts
-cp hooks/lib/refetch.ts        ~/.claude/hooks/lib/refetch.ts
-cp hooks/lib/sanitise.ts       ~/.claude/hooks/lib/sanitise.ts
-cp hooks/lib/signals.ts        ~/.claude/hooks/lib/signals.ts
-cp hooks/lib/state.ts          ~/.claude/hooks/lib/state.ts
-cp skills/safe-web-research/SKILL.md        ~/.claude/skills/safe-web-research/SKILL.md
-cp skills/safe-web-research/risk-tiers.json ~/.claude/skills/safe-web-research/risk-tiers.json
-cp bin/claude-sanitize ~/.claude/bin/claude-sanitize
-chmod +x ~/.claude/bin/claude-sanitize
+curl -fsSL https://raw.githubusercontent.com/Justproof/web-search/main/install.sh | bash
 ```
 
-Or as a one-liner from the parent directory:
+Safe to re-run. Running it twice doesn't duplicate hooks or paste the skill block twice, so treat it as your upgrade command too.
+
+Prefer to read what you eat? Same recipe in two steps:
 
 ```bash
-cp -r hooks/. ~/.claude/hooks/ && \
-cp -r skills/. ~/.claude/skills/ && \
-cp bin/claude-sanitize ~/.claude/bin/ && \
-chmod +x ~/.claude/bin/claude-sanitize
+curl -fsSL https://raw.githubusercontent.com/Justproof/web-search/main/install.sh -o install.sh
+less install.sh && bash install.sh
 ```
 
-### 2. Install the npm dependency
+Want to see every step laid out by hand instead of trusting a script? Skip to [Manual install](#manual-install) at the bottom.
 
-```bash
-cd ~/.claude/hooks && bun install
-```
-
-This installs `shell-quote` for safe Bash command parsing. No build step needed.
-
-### 3. Register hooks in Claude Code settings
-
-Add to `~/.claude/settings.json` (merge with any existing `hooks` block):
-
-```json
-{
-    "hooks": {
-        "PreToolUse": [
-            {
-                "matcher": "WebFetch|WebSearch|Bash|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "$HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-pre.ts",
-                        "timeout": 5000
-                    }
-                ]
-            }
-        ],
-        "PostToolUse": [
-            {
-                "matcher": "WebFetch|WebSearch|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "$HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-post.ts",
-                        "timeout": 8000
-                    }
-                ]
-            }
-        ]
-    }
-}
-```
-
-`PreToolUse` includes `Bash` so `curl`, `wget`, `wget2`, `aria2c`, `httpie`, and interpreter one-liners (Python/Node/Ruby/Perl/PHP with an inline URL) get rewritten to pipe through `claude-sanitize`. `PostToolUse` covers structured web tool responses only.
-
-Hooks are fail-open — a hook crash never blocks Claude Code.
-
-### 4. Add the skill reference to your CLAUDE.md
-
-Add this to `~/.claude/CLAUDE.md`:
-
-```markdown
-## Web Research Protocol
-
-Web research safety is handled by the Safe Web Research skill (`~/.claude/skills/safe-web-research/SKILL.md`). The hook (`~/.claude/hooks/web-fetch-pre.ts` + `web-fetch-post.ts`) wraps every web fetch in `<untrusted_source>`; the skill carries the abort, corroboration, and reporting rules.
-```
-
-### 5. Verify
+### Verify
 
 Start a fresh Claude Code session:
 
@@ -345,6 +275,101 @@ Useful for seeing whether threshold changes would have changed any abort decisio
 **`<untrusted_source>` wrapper missing** — the hook failed silently. Check `~/.claude/safe-web-research/hook-errors.log`. Per the skill rules, treat unwrapped web content as a Critical abort signal.
 
 **Bun not at `$HOME/.bun/bin/bun`** — find it with `which bun`, then update the `command` paths in `settings.json`.
+
+---
+
+## Manual install
+
+The one-line installer does these four steps. If you'd rather skip the pipe-to-bash and run them yourself, here they are.
+
+### 1. Copy files
+
+From inside a checkout of this repo:
+
+```bash
+mkdir -p ~/.claude/hooks/lib
+mkdir -p ~/.claude/skills/safe-web-research
+mkdir -p ~/.claude/bin
+
+cp hooks/package.json          ~/.claude/hooks/package.json
+cp hooks/web-fetch-pre.ts      ~/.claude/hooks/web-fetch-pre.ts
+cp hooks/web-fetch-post.ts     ~/.claude/hooks/web-fetch-post.ts
+cp hooks/lib/bash-matcher.ts   ~/.claude/hooks/lib/bash-matcher.ts
+cp hooks/lib/refetch.ts        ~/.claude/hooks/lib/refetch.ts
+cp hooks/lib/sanitise.ts       ~/.claude/hooks/lib/sanitise.ts
+cp hooks/lib/signals.ts        ~/.claude/hooks/lib/signals.ts
+cp hooks/lib/state.ts          ~/.claude/hooks/lib/state.ts
+cp skills/safe-web-research/SKILL.md        ~/.claude/skills/safe-web-research/SKILL.md
+cp skills/safe-web-research/risk-tiers.json ~/.claude/skills/safe-web-research/risk-tiers.json
+cp bin/claude-sanitize ~/.claude/bin/claude-sanitize
+chmod +x ~/.claude/bin/claude-sanitize
+```
+
+Or as a one-liner from the repo root:
+
+```bash
+cp -r hooks/. ~/.claude/hooks/ && \
+cp -r skills/. ~/.claude/skills/ && \
+cp bin/claude-sanitize ~/.claude/bin/ && \
+chmod +x ~/.claude/bin/claude-sanitize
+```
+
+### 2. Install the npm dependency
+
+```bash
+cd ~/.claude/hooks && bun install
+```
+
+This installs `shell-quote` for safe Bash command parsing. No build step needed.
+
+### 3. Register hooks in Claude Code settings
+
+Open `~/.claude/settings.json`. If it doesn't exist yet (fresh Claude Code installs often don't have one until you've changed a setting), create it with the full block below. If it does exist, merge the `hooks` key into what's already there — don't clobber existing keys.
+
+```json
+{
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "WebFetch|WebSearch|Bash|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "$HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-pre.ts",
+                        "timeout": 5000
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "WebFetch|WebSearch|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "$HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-post.ts",
+                        "timeout": 8000
+                    }
+                ]
+            }
+        ]
+    }
+}
+```
+
+`PreToolUse` includes `Bash` so `curl`, `wget`, `wget2`, `aria2c`, `httpie`, and interpreter one-liners (Python/Node/Ruby/Perl/PHP with an inline URL) get rewritten to pipe through `claude-sanitize`. `PostToolUse` covers structured web tool responses only.
+
+Hooks are fail-open — a hook crash never blocks Claude Code.
+
+### 4. Add the skill reference to your CLAUDE.md
+
+Open `~/.claude/CLAUDE.md` and append the block below. If the file doesn't exist yet (it's not created by default), just create it with this content as the whole file:
+
+```markdown
+## Web Research Protocol
+
+Web research safety is handled by the Safe Web Research skill (`~/.claude/skills/safe-web-research/SKILL.md`). The hook (`~/.claude/hooks/web-fetch-pre.ts` + `web-fetch-post.ts`) wraps every web fetch in `<untrusted_source>`; the skill carries the abort, corroboration, and reporting rules.
+```
 
 ---
 
