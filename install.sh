@@ -94,8 +94,8 @@ const bunPath = process.env.BUN_BIN_PORTABLE!;
 
 const PRE_MATCHER  = "WebFetch|WebSearch|Bash|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*";
 const POST_MATCHER = "WebFetch|WebSearch|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*";
-const PRE_CMD  = `${bunPath} run $HOME/.claude/hooks/web-fetch-pre.ts`;
-const POST_CMD = `${bunPath} run $HOME/.claude/hooks/web-fetch-post.ts`;
+const PRE_CMD  = `CLAUDE_SANITISER_MODE=enforce ${bunPath} run $HOME/.claude/hooks/web-fetch-pre.ts`;
+const POST_CMD = `CLAUDE_SANITISER_MODE=enforce ${bunPath} run $HOME/.claude/hooks/web-fetch-post.ts`;
 
 let settings: any = {};
 if (existsSync(file)) {

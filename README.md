@@ -195,23 +195,18 @@ Tier assignments live in `skills/safe-web-research/risk-tiers.json` and can be o
 
 | Mode | Behavior |
 | --- | --- |
-| `log` (default) | Computes signals and wraps content, but passes the **original** bytes through. The wrapper includes a `rules_pending` attribute listing what would have been stripped — Claude knows stripping is pending but the raw content is still present. Good for a soak period to understand signal frequency before enabling stripping. |
-| `enforce` | Returns sanitized + wrapped responses. Scripts, style blocks, iframes, hidden elements, event handlers, boilerplate tags (`nav`, `noscript`, `svg`, `aside`), and zero-width chars are stripped. `<header>` and `<footer>` are preserved. |
+| `enforce` (default) | Returns sanitized + wrapped responses. Scripts, style blocks, iframes, hidden elements, event handlers, boilerplate tags (`nav`, `noscript`, `svg`, `aside`), and zero-width chars are stripped before Claude reads a single byte. `<header>` and `<footer>` are preserved — they carry bylines, dates, and citations. |
+| `log` | Computes signals and wraps content, but passes the **original** bytes through. The wrapper includes a `rules_pending` attribute listing what would have been stripped. Useful during development to understand signal frequency without affecting output. |
 
-Switch modes via environment variable:
+`enforce` is the default because `log` mode leaves adversarial bytes in context and relies entirely on Claude's self-reminder rule to resist them — a reasoning layer, not a hard filter. Novel injection phrasings that slip past the pattern matcher still reach the model in full. `enforce` removes the content before reasoning begins, so pattern-list gaps cannot be exploited. Use `log` only when debugging sanitiser behavior.
 
-```bash
-export CLAUDE_SANITISER_MODE=enforce
-```
-
-Or in `~/.claude/settings.json`:
+Set it in each hook command in `~/.claude/settings.json` (the installer does this automatically):
 
 ```json
-{
-    "env": {
-        "CLAUDE_SANITISER_MODE": "enforce"
-    }
-}
+"command": "CLAUDE_SANITISER_MODE=enforce $HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-post.ts"
+```
+
+To temporarily revert to log mode for debugging, change `enforce` to `log` in both hook entries in `settings.json`.
 ```
 
 ---
@@ -335,7 +330,7 @@ Open `~/.claude/settings.json`. If it doesn't exist yet (fresh Claude Code insta
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "$HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-pre.ts",
+                        "command": "CLAUDE_SANITISER_MODE=enforce $HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-pre.ts",
                         "timeout": 5000
                     }
                 ]
@@ -347,7 +342,7 @@ Open `~/.claude/settings.json`. If it doesn't exist yet (fresh Claude Code insta
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "$HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-post.ts",
+                        "command": "CLAUDE_SANITISER_MODE=enforce $HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-post.ts",
                         "timeout": 8000
                     }
                 ]
