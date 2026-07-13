@@ -45,7 +45,7 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
 fi
 
 TMP_DIR=""
-cleanup() { [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"; }
+cleanup() { if [ -n "$TMP_DIR" ]; then rm -rf "$TMP_DIR"; fi; }
 trap cleanup EXIT
 
 if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/hooks" ] && [ -d "$SCRIPT_DIR/skills/safe-web-research" ] && [ -f "$SCRIPT_DIR/bin/claude-sanitize" ]; then
