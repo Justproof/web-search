@@ -17,6 +17,7 @@ import {
     setRobotsCache,
 } from "./lib/state.ts";
 import { loadRiskTiersConfig } from "./lib/signals.ts";
+import { checkUrlAdversarial } from "./lib/url-checks.ts";
 import { appendFileSync } from "node:fs";
 
 interface PreToolUseInput {
@@ -144,84 +145,12 @@ const robotsDisallowsPath = (
 const renderReminder = (lines: string[]): string =>
     `<system-reminder>\n${lines.join("\n")}\n</system-reminder>`;
 
-const ZERO_WIDTH_URL_RE = /[​‌‍⁠᠎﻿]/;
-
-// Extract the raw hostname from the URL string before URL parsing normalises
-// Unicode to punycode — homoglyph attacks are invisible after normalisation.
-const extractRawHost = (urlStr: string): string | null => {
-    const m = /^[a-z][a-z0-9+\-.]*:\/\/([^/?#]*)/i.exec(urlStr);
-    if (!m) {
-        return null;
-    }
-    const authority = m[1]!;
-    const atIdx = authority.lastIndexOf("@");
-    const hostPort = atIdx >= 0 ? authority.slice(atIdx + 1) : authority;
-    if (hostPort.startsWith("[")) {
-        const end = hostPort.indexOf("]");
-        return end >= 0 ? hostPort.slice(0, end + 1) : null;
-    }
-    return hostPort.split(":")[0] ?? null;
-};
-
-// FR-27: URL-level adversarial input checks. Returns a reason string if the
-// URL should be refused, null if clean. Runs before any bytes are pulled.
-const checkUrlAdversarial = (urlStr: string): string | null => {
-    let parsed: URL;
-    try {
-        parsed = new URL(urlStr);
-    } catch {
-        return null;
-    }
-
-    // Embedded credentials (phishing / SSRF vector)
-    if (parsed.username || parsed.password) {
-        return "embedded credentials in URL (user:pass@ pattern)";
-    }
-
-    // Multiple @ in authority — parsers disagree on which part is the host
-    const afterScheme = urlStr.slice(urlStr.indexOf("://") + 3);
-    const rawAuthority = afterScheme.split(/[/?#]/)[0] ?? "";
-    if ((rawAuthority.match(/@/g) ?? []).length > 1) {
-        return "multiple @ characters in URL authority";
-    }
-
-    // Zero-width chars in host or path
-    if (
-        ZERO_WIDTH_URL_RE.test(parsed.hostname) ||
-        ZERO_WIDTH_URL_RE.test(parsed.pathname)
-    ) {
-        return "zero-width characters in URL host or path";
-    }
-
-    // Non-ASCII in hostname — inspect the raw string before punycode normalisation
-    // hides the homoglyph. Any non-ASCII label without an explicit xn-- prefix is refused.
-    const rawHost = extractRawHost(urlStr);
-    if (rawHost !== null) {
-        for (const label of rawHost.split(".")) {
-            if (label.startsWith("xn--")) {
-                continue;
-            }
-            for (let i = 0; i < label.length; i++) {
-                if (label.charCodeAt(i) > 127) {
-                    return `non-ASCII characters in hostname label "${label}" — possible homoglyph/IDN attack`;
-                }
-            }
-        }
-    }
-
-    return null;
-};
-
 const handleWebUrlTool = async (
     input: PreToolUseInput,
     url: string,
     cfg: ReturnType<typeof loadRiskTiersConfig>,
 ): Promise<HookOutput> => {
     const messages: string[] = [];
-    const domain = extractDomain(url);
-    if (!domain) {
-        return {};
-    }
 
     // FR-27: URL-level adversarial checks — deny before any fetch happens.
     const adversarialReason = checkUrlAdversarial(url);
@@ -235,14 +164,28 @@ const handleWebUrlTool = async (
         };
     }
 
-    // Per-session counter (FR-5). Subagent fetches share the parent session_id
-    // so this counter naturally includes them.
+    // Per-session counter (FR-5). Runs before the domain-parse early-return so
+    // unparseable URLs still count. Subagent fetches share the parent
+    // session_id so this counter naturally includes them.
     const sessionId = input.session_id ?? "unknown";
     const callCount = incrementSessionCounter(sessionId);
     if (callCount >= 2) {
         messages.push(
             `[safe-web-research] This is web tool call #${callCount} this session. Load skills/safe-web-research/SKILL.md before continuing — apply hygiene rules, abort criteria, and the <safe_research_summary> emission requirement to every cited source.`,
         );
+    }
+
+    const domain = extractDomain(url);
+    if (!domain) {
+        return messages.length > 0
+            ? {
+                  hookSpecificOutput: {
+                      hookEventName: "PreToolUse",
+                      additionalContext: renderReminder(messages),
+                  },
+                  additionalContext: renderReminder(messages),
+              }
+            : {};
     }
 
     // Blocklist check (FR-22.3)
@@ -353,6 +296,24 @@ const main = async (): Promise<void> => {
 
     if (toolName === "Bash") {
         out = handleBash(input);
+    } else if (toolName === "WebSearch") {
+        // FR-31: a search query is never a fetch. Robots.txt and the FR-27
+        // URL gates apply when a result is fetched, not at search time — so
+        // the query is deliberately NOT routed through handleWebUrlTool, even
+        // when it happens to start with "http". Just bump the counter and
+        // inject the skill reminder.
+        const sessionId = input.session_id ?? "unknown";
+        const callCount = incrementSessionCounter(sessionId);
+        if (callCount >= 2) {
+            out = {
+                hookSpecificOutput: {
+                    hookEventName: "PreToolUse",
+                    additionalContext: renderReminder([
+                        `[safe-web-research] Web tool call #${callCount} this session. Load skills/safe-web-research/SKILL.md.`,
+                    ]),
+                },
+            };
+        }
     } else if (isWebTool(toolName)) {
         const url =
             (input.tool_input?.url as string | undefined) ??
@@ -360,20 +321,6 @@ const main = async (): Promise<void> => {
             "";
         if (url && url.startsWith("http")) {
             out = await handleWebUrlTool(input, url, cfg);
-        } else if (toolName === "WebSearch") {
-            // No URL to robots-check; just bump counter + maybe inject reminder
-            const sessionId = input.session_id ?? "unknown";
-            const callCount = incrementSessionCounter(sessionId);
-            if (callCount >= 2) {
-                out = {
-                    hookSpecificOutput: {
-                        hookEventName: "PreToolUse",
-                        additionalContext: renderReminder([
-                            `[safe-web-research] Web tool call #${callCount} this session. Load skills/safe-web-research/SKILL.md.`,
-                        ]),
-                    },
-                };
-            }
         }
     }
 

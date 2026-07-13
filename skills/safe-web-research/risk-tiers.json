@@ -55,6 +55,14 @@
         "near_duplicate_to_session": {
             "tier": "elevated",
             "description": "Simhash within near_duplicate_hamming_distance of an earlier fetch in this session"
+        },
+        "blocklisted_result_domain": {
+            "tier": "elevated",
+            "description": "A WebSearch result URL's domain is on the session or persistent blocklist (FR-31)"
+        },
+        "suspicious_result_url": {
+            "tier": "elevated",
+            "description": "A WebSearch result URL failed FR-27 adversarial checks: homoglyph/IDN host, embedded credentials, zero-width chars, or multi-@ authority (FR-31)"
         }
     },
     "per_domain_overrides": {

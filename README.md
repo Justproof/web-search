@@ -153,6 +153,7 @@ Every web fetch goes through two checkpoints:
 **Pre-hook** — before the request:
 - URL-level checks: homoglyphs, non-ASCII hostnames, embedded credentials, zero-width chars in host or path, multi-`@` authority tricks — hard deny, no fetch
 - `robots.txt` fetch and cache (24h TTL); advisory reminder if the path is disallowed for AI agents — the hook does not block, Claude decides whether to proceed
+- Search queries are never treated as fetches: `WebSearch` skips the robots.txt and URL gates (those apply when a result is fetched) and just counts toward the per-session skill reminder
 - Bash command rewriting: `curl`, `wget`, `wget2`, `aria2c`, `httpie`, `lynx`, `w3m`, and interpreter one-liners (Python/Node/Ruby/Perl/PHP with inline URL) get piped through `claude-sanitize`
 - Trusted domains in the `meta_allowlist` have a single `injection_phrase` signal downgraded from Critical abort to advisory — useful for security research and documentation sites
 
@@ -160,6 +161,7 @@ Every web fetch goes through two checkpoints:
 - Strips scripts, hidden elements, event handlers, and zero-width characters (in `enforce` mode); `<header>` and `<footer>` tags are intentionally preserved — they carry bylines, dates, and citations inside articles that stripping would destroy
 - Computes risk signals (injection phrases, cloaking, oversized responses, tarpit patterns)
 - Runs a parallel refetch to detect cloaking (the page serving different content to Claude than to a browser); reports simhash distance and threshold in the advisory
+- Vets the URLs inside search results (first 50 distinct): blocklisted domains and URLs failing the homoglyph/credential/zero-width checks fire Elevated signals and an advisory naming the results Claude must not open
 - Wraps everything in `<untrusted_source>` with signal metadata; in `log` mode the wrapper includes a `rules_pending` attribute listing what would have been stripped
 
 **Skill** — when Claude reads the result:
@@ -186,6 +188,8 @@ Every web fetch goes through two checkpoints:
 - `redirect_chain_long` (> 5 hops)
 - `content_type_mismatch`
 - `near_duplicate_to_session`
+- `blocklisted_result_domain` — a search result's domain is blocklisted
+- `suspicious_result_url` — a search result URL fails the homoglyph / credential / zero-width checks
 
 Tier assignments live in `skills/safe-web-research/risk-tiers.json` and can be overridden via the SQLite config.
 
@@ -294,6 +298,7 @@ cp hooks/lib/refetch.ts        ~/.claude/hooks/lib/refetch.ts
 cp hooks/lib/sanitise.ts       ~/.claude/hooks/lib/sanitise.ts
 cp hooks/lib/signals.ts        ~/.claude/hooks/lib/signals.ts
 cp hooks/lib/state.ts          ~/.claude/hooks/lib/state.ts
+cp hooks/lib/url-checks.ts     ~/.claude/hooks/lib/url-checks.ts
 cp skills/safe-web-research/SKILL.md        ~/.claude/skills/safe-web-research/SKILL.md
 cp skills/safe-web-research/risk-tiers.json ~/.claude/skills/safe-web-research/risk-tiers.json
 cp bin/claude-sanitize ~/.claude/bin/claude-sanitize
