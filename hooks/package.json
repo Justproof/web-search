@@ -1,8 +1,11 @@
 {
     "name": "claude-web-fetch-sanitiser",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "type": "module",
     "private": true,
+    "scripts": {
+        "test": "bun test"
+    },
     "dependencies": {
         "shell-quote": "^1.8.1"
     },

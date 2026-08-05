@@ -29,6 +29,75 @@ ok()   { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
 warn() { printf '%s!%s %s\n' "$YELLOW" "$RESET" "$*"; }
 die()  { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 
+usage() {
+    cat <<'USAGE'
+Safe Web Research installer
+
+  ./install.sh                 Install or upgrade (mode: enforce)
+  ./install.sh --mode strict   Install with WebFetch refused in favour of the
+                               curl | claude-sanitize path (the only path where
+                               the sanitiser controls the bytes you receive)
+  ./install.sh --mode log      Install in advisory-only mode
+  ./install.sh --uninstall     Remove hooks from settings.json and delete files
+  ./install.sh --help          This message
+
+State (fetch log, blocklist, robots cache) lives in ~/.claude/safe-web-research
+and is left alone by --uninstall unless you pass --purge.
+USAGE
+}
+
+MODE="enforce"
+ACTION="install"
+PURGE=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mode)      MODE="${2:-enforce}"; shift 2 ;;
+        --mode=*)    MODE="${1#*=}"; shift ;;
+        --uninstall) ACTION="uninstall"; shift ;;
+        --purge)     PURGE=1; shift ;;
+        --help|-h)   usage; exit 0 ;;
+        *)           printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+case "$MODE" in
+    enforce|log|strict) ;;
+    *) die "Invalid --mode '$MODE' (expected: enforce, log, or strict)" ;;
+esac
+
+# ---- Uninstall ---------------------------------------------------------------
+if [ "$ACTION" = "uninstall" ]; then
+    command -v bun >/dev/null 2>&1 || die "bun not found (needed to edit settings.json)."
+    if [ -f "$SETTINGS_FILE" ]; then
+        cp "$SETTINGS_FILE" "$SETTINGS_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+        SETTINGS_FILE="$SETTINGS_FILE" bun -e '
+            const { readFileSync, writeFileSync } = require("node:fs");
+            const file = process.env.SETTINGS_FILE;
+            const settings = JSON.parse(readFileSync(file, "utf8"));
+            const drop = (list) => (Array.isArray(list) ? list : []).filter((e) =>
+                !(Array.isArray(e?.hooks) && e.hooks.some((h) =>
+                    typeof h?.command === "string" && /web-fetch-(pre|post)\.ts/.test(h.command))));
+            if (settings.hooks) {
+                settings.hooks.PreToolUse  = drop(settings.hooks.PreToolUse);
+                settings.hooks.PostToolUse = drop(settings.hooks.PostToolUse);
+            }
+            writeFileSync(file, JSON.stringify(settings, null, 4) + "\n");
+        '
+        ok "Hooks removed from settings.json (backup written)"
+    fi
+    rm -f "${HOOKS_DIR:?}/web-fetch-pre.ts" "${HOOKS_DIR:?}/web-fetch-post.ts" "${BIN_DIR:?}/claude-sanitize"
+    rm -rf "${HOOKS_DIR:?}/lib" "${SKILL_DIR:?}"
+    ok "Files removed"
+    if [ "$PURGE" -eq 1 ]; then
+        rm -rf "${CLAUDE_HOME:?}/safe-web-research"
+        ok "State directory purged"
+    else
+        say "${DIM}State kept at $CLAUDE_HOME/safe-web-research (re-run with --purge to delete)${RESET}"
+    fi
+    say "${DIM}The Web Research Protocol block in CLAUDE.md was left in place — remove it by hand if you want it gone.${RESET}"
+    exit 0
+fi
+
 # ---- 1. Prereqs --------------------------------------------------------------
 command -v bun  >/dev/null 2>&1 || die "bun not found. Install: curl -fsSL https://bun.sh/install | bash"
 command -v curl >/dev/null 2>&1 || die "curl not found."
@@ -66,7 +135,12 @@ mkdir -p "$HOOKS_DIR/lib" "$SKILL_DIR" "$BIN_DIR"
 cp "$SRC_DIR/hooks/package.json"      "$HOOKS_DIR/package.json"
 cp "$SRC_DIR/hooks/web-fetch-pre.ts"  "$HOOKS_DIR/web-fetch-pre.ts"
 cp "$SRC_DIR/hooks/web-fetch-post.ts" "$HOOKS_DIR/web-fetch-post.ts"
-cp "$SRC_DIR"/hooks/lib/*.ts          "$HOOKS_DIR/lib/"
+for f in "$SRC_DIR"/hooks/lib/*.ts; do
+    case "$f" in
+        *.test.ts) continue ;;  # tests stay in the repo, not the install
+    esac
+    cp "$f" "$HOOKS_DIR/lib/"
+done
 cp "$SRC_DIR/skills/safe-web-research/SKILL.md"        "$SKILL_DIR/SKILL.md"
 cp "$SRC_DIR/skills/safe-web-research/risk-tiers.json" "$SKILL_DIR/risk-tiers.json"
 cp "$SRC_DIR/bin/claude-sanitize"     "$BIN_DIR/claude-sanitize"
@@ -92,10 +166,15 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 const file = process.env.SETTINGS_FILE!;
 const bunPath = process.env.BUN_BIN_PORTABLE!;
 
-const PRE_MATCHER  = "WebFetch|WebSearch|Bash|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*";
-const POST_MATCHER = "WebFetch|WebSearch|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*";
-const PRE_CMD  = `CLAUDE_SANITISER_MODE=enforce ${bunPath} run $HOME/.claude/hooks/web-fetch-pre.ts`;
-const POST_CMD = `CLAUDE_SANITISER_MODE=enforce ${bunPath} run $HOME/.claude/hooks/web-fetch-post.ts`;
+// Browser tools that return page-derived text all have to be matched, not just
+// the obvious ones: javascript_tool, find, browser_batch and read_console_messages
+// can each return a full page body.
+const MCP_TOOLS = "mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests|read_console_messages|javascript_tool|find|browser_batch)|mcp__brightdata__.*";
+const PRE_MATCHER  = `WebFetch|WebSearch|Bash|${MCP_TOOLS}`;
+const POST_MATCHER = `WebFetch|WebSearch|${MCP_TOOLS}`;
+const mode = process.env.SANITISER_MODE || "enforce";
+const PRE_CMD  = `CLAUDE_SANITISER_MODE=${mode} ${bunPath} run $HOME/.claude/hooks/web-fetch-pre.ts`;
+const POST_CMD = `CLAUDE_SANITISER_MODE=${mode} ${bunPath} run $HOME/.claude/hooks/web-fetch-post.ts`;
 
 let settings: any = {};
 if (existsSync(file)) {
@@ -133,7 +212,7 @@ settings.hooks.PostToolUse.push({
 writeFileSync(file, JSON.stringify(settings, null, 4) + "\n");
 BUN_MERGE
 
-SETTINGS_FILE="$SETTINGS_FILE" BUN_BIN_PORTABLE="$BUN_BIN_PORTABLE" bun run "$MERGE_SCRIPT"
+SETTINGS_FILE="$SETTINGS_FILE" BUN_BIN_PORTABLE="$BUN_BIN_PORTABLE" SANITISER_MODE="$MODE" bun run "$MERGE_SCRIPT"
 rm -f "$MERGE_SCRIPT"
 ok "settings.json updated"
 
@@ -160,13 +239,26 @@ fi
 # ---- Done --------------------------------------------------------------------
 cat <<EOF
 
-${BOLD}Safe Web Research installed.${RESET}
+${BOLD}Safe Web Research installed${RESET} (mode: ${BOLD}$MODE${RESET})
 
 Verify in a fresh Claude Code session:
     fetch https://example.com and summarize it
 
 Or check directly:
     $BIN_DIR/claude-sanitize status
+
+${BOLD}What each mode gives you${RESET}
+    log      Signals and provenance only; nothing is stripped.
+    enforce  Adds a sanitised, wrapped copy of every result plus the abort
+             verdict. Claude Code does not let a hook replace a built-in tool's
+             output, so the raw WebFetch text still reaches the model alongside
+             it — enforcement here is advisory-plus-evidence, not removal.
+    strict   Refuses WebFetch and the browser read tools outright and routes you
+             to 'curl … | claude-sanitize', the one path where the sanitiser
+             controls the bytes the model sees. Choose this if you want the
+             stripping to be real.
+
+Uninstall any time with:  ./install.sh --uninstall
 
 Docs: https://github.com/Justproof/web-search
 EOF

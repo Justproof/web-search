@@ -1,0 +1,51 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install hook dependencies
+        working-directory: hooks
+        run: bun install --frozen-lockfile
+
+      - name: Run tests
+        working-directory: hooks
+        run: bun test
+
+      - name: Validate risk-tiers.json
+        run: |
+          bun -e '
+            const cfg = await Bun.file("skills/safe-web-research/risk-tiers.json").json();
+            const required = [
+              "oversized_response_bytes","repeating_substring_ratio_max",
+              "url_cardinality_explosion_count","url_cardinality_explosion_window_minutes",
+              "zero_width_chars_max","hidden_content_ratio_max","redirect_chain_max_hops",
+              "near_duplicate_hamming_distance","abort_on_elevated_count",
+              "robots_cache_ttl_hours","session_blocklist_repeat_threshold",
+              "auto_blocklist_ttl_days","fetch_log_retention_days",
+            ];
+            const missing = required.filter((k) => !(k in cfg.thresholds));
+            if (missing.length) { throw new Error("missing thresholds: " + missing.join(", ")); }
+            for (const [name, def] of Object.entries(cfg.signals)) {
+              if (def.tier !== "critical" && def.tier !== "elevated") {
+                throw new Error(`signal ${name} has invalid tier ${def.tier}`);
+              }
+            }
+            console.log(`ok: ${Object.keys(cfg.signals).length} signals, ${cfg.injection_phrases.length} phrases`);
+          '
+
+      - name: Installer shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck install.sh

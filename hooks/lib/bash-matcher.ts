@@ -8,271 +8,397 @@ import { parse, quote } from "shell-quote";
 
 // Dedicated CLI HTTP tools — primary purpose is fetching URLs.
 const FETCH_BINS = new Set([
-    "curl",
-    "wget",
-    "wget2",
-    "http",
-    "httpie",
-    "aria2c",
-    "lynx",
-    "w3m",
+	"curl",
+	"curlie",
+	"wget",
+	"wget2",
+	"http",
+	"https",
+	"httpie",
+	"xh",
+	"aria2c",
+	"lynx",
+	"w3m",
+	"links",
+	"elinks",
+]);
+
+// Wrappers that take another command as their argument. Without this the
+// matcher only ever inspected token 0, so `command curl …`, `env curl …`,
+// `timeout 5 curl …`, `sudo curl …` and friends all bypassed the sanitiser.
+const WRAPPER_BINS = new Set([
+	"command",
+	"builtin",
+	"env",
+	"exec",
+	"nohup",
+	"sudo",
+	"doas",
+	"timeout",
+	"nice",
+	"ionice",
+	"stdbuf",
+	"caffeinate",
+	"setsid",
+	"unbuffer",
+	"time",
 ]);
 
 // Interpreter binaries that can make HTTP requests via -c/-e inline code.
 // We only match these when the inline argument contains a URL pattern — we
 // cannot intercept network calls inside script files (python3 script.py etc.).
 const INTERPRETER_BINS = new Set([
-    "python",
-    "python3",
-    "node",
-    "nodejs",
-    "ruby",
-    "perl",
-    "php",
+	"python",
+	"python3",
+	"node",
+	"nodejs",
+	"bun",
+	"deno",
+	"ruby",
+	"perl",
+	"php",
 ]);
 
-const INLINE_FLAG = new Set(["-c", "-e"]);
+const INLINE_FLAG = new Set(["-c", "-e", "--eval", "-E"]);
 const INLINE_URL_RE = /https?:\/\//i;
+
+// Flags that send the response to a file instead of stdout. Piping stdout
+// through the sanitiser does nothing for these — the bytes land on disk raw.
+const OUTPUT_TO_FILE_FLAGS = new Set([
+	"-o",
+	"-O",
+	"--output",
+	"--output-document",
+	"--remote-name",
+	"-P",
+	"--directory-prefix",
+	"--create-dirs",
+]);
 
 const SANITIZER_BIN = `${process.env.HOME}/.claude/bin/claude-sanitize`;
 
 export interface BashMatch {
-    matched: boolean;
-    bins: string[];
-    interpreterDetected: boolean;
-    rewrittenCommand: string | null;
-    parseFailed: boolean;
-    reason: string | null;
+	matched: boolean;
+	bins: string[];
+	interpreterDetected: boolean;
+	writesToFile: boolean;
+	rewrittenCommand: string | null;
+	parseFailed: boolean;
+	reason: string | null;
 }
 
 type ParsedToken =
-    | string
-    | { op: string }
-    | { command: string }
-    | { pattern: string }
-    | { comment: string };
+	| string
+	| { op: string }
+	| { command: string }
+	| { pattern: string }
+	| { comment: string };
 
-const stripEnvPrefix = (tokens: ParsedToken[]): ParsedToken[] => {
-    let i = 0;
-    while (i < tokens.length) {
-        const t = tokens[i];
-        if (typeof t === "string" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) {
-            i++;
-            continue;
-        }
-        break;
-    }
-    return tokens.slice(i);
+const asString = (t: ParsedToken | undefined): string | null =>
+	typeof t === "string" ? t : null;
+
+const basenameOf = (s: string): string => s.split("/").pop() ?? s;
+
+const isEnvAssignment = (s: string): boolean =>
+	/^[A-Za-z_][A-Za-z0-9_]*=/.test(s);
+
+// Duration arguments to `timeout` (5, 5s, 1m, 0.5) — skipped so the real
+// command head can be reached.
+const isDurationArg = (s: string): boolean => /^\d+(\.\d+)?[smhd]?$/.test(s);
+
+// Walk past env assignments and command wrappers to the token that is actually
+// the command being run.
+const resolveCommandHead = (
+	tokens: ParsedToken[],
+): { head: string | null; rest: ParsedToken[] } => {
+	let i = 0;
+	let consumedWrapper = false;
+	while (i < tokens.length) {
+		const tok = asString(tokens[i]);
+		if (tok === null) {
+			return { head: null, rest: tokens.slice(i) };
+		}
+		if (isEnvAssignment(tok)) {
+			i++;
+			continue;
+		}
+		const base = basenameOf(tok);
+		if (WRAPPER_BINS.has(base)) {
+			consumedWrapper = true;
+			i++;
+			continue;
+		}
+		if (consumedWrapper && (tok.startsWith("-") || isDurationArg(tok))) {
+			i++;
+			continue;
+		}
+		return { head: base, rest: tokens.slice(i) };
+	}
+	return { head: null, rest: [] };
 };
 
-const containsFetchBin = (
-    tokens: ParsedToken[],
-): { found: string | null; afterEnv: ParsedToken[] } => {
-    const trimmed = stripEnvPrefix(tokens);
-    if (trimmed.length === 0) {
-        return { found: null, afterEnv: trimmed };
-    }
-    const head = trimmed[0];
-    if (typeof head !== "string") {
-        return { found: null, afterEnv: trimmed };
-    }
-    const basename = head.split("/").pop() ?? head;
-    if (FETCH_BINS.has(basename)) {
-        return { found: basename, afterEnv: trimmed };
-    }
-    // xargs invocations: xargs curl, xargs -n1 curl
-    if (basename === "xargs") {
-        for (let i = 1; i < trimmed.length; i++) {
-            const next = trimmed[i];
-            if (typeof next !== "string") {
-                continue;
-            }
-            if (next.startsWith("-")) {
-                continue;
-            }
-            const nextBase = next.split("/").pop() ?? next;
-            if (FETCH_BINS.has(nextBase)) {
-                return { found: nextBase, afterEnv: trimmed };
-            }
-            break;
-        }
-    }
-    // Interpreter inline-code invocations: python3 -c "...", node -e "...", etc.
-    // Only matches when the inline argument contains a URL — we cannot intercept
-    // network calls inside script files (python3 script.py is opaque to this hook).
-    if (INTERPRETER_BINS.has(basename)) {
-        for (let i = 1; i < trimmed.length - 1; i++) {
-            const flag = trimmed[i];
-            if (typeof flag !== "string" || !INLINE_FLAG.has(flag)) {
-                continue;
-            }
-            const code = trimmed[i + 1];
-            if (typeof code === "string" && INLINE_URL_RE.test(code)) {
-                return { found: basename, afterEnv: trimmed };
-            }
-        }
-    }
-    return { found: null, afterEnv: trimmed };
+const containsFetchBin = (tokens: ParsedToken[]): string | null => {
+	const { head, rest } = resolveCommandHead(tokens);
+	if (head === null) {
+		return null;
+	}
+	if (FETCH_BINS.has(head)) {
+		return head;
+	}
+	// xargs invocations: xargs curl, xargs -n1 curl
+	if (head === "xargs") {
+		for (let i = 1; i < rest.length; i++) {
+			const next = asString(rest[i]);
+			if (next === null) {
+				continue;
+			}
+			if (next.startsWith("-")) {
+				continue;
+			}
+			const nextBase = basenameOf(next);
+			if (FETCH_BINS.has(nextBase)) {
+				return nextBase;
+			}
+			break;
+		}
+	}
+	// Interpreter inline-code invocations: python3 -c "...", node -e "...", etc.
+	// Only matches when the inline argument contains a URL — we cannot intercept
+	// network calls inside script files (python3 script.py is opaque to this hook).
+	if (INTERPRETER_BINS.has(head)) {
+		for (let i = 1; i < rest.length - 1; i++) {
+			const flag = asString(rest[i]);
+			if (flag === null || !INLINE_FLAG.has(flag)) {
+				continue;
+			}
+			const code = asString(rest[i + 1]);
+			if (code !== null && INLINE_URL_RE.test(code)) {
+				return head;
+			}
+		}
+	}
+	return null;
 };
+
+const segmentWritesToFile = (tokens: ParsedToken[]): boolean =>
+	tokens.some((t) => {
+		const s = asString(t);
+		return s !== null && OUTPUT_TO_FILE_FLAGS.has(s);
+	});
 
 const splitByOperators = (tokens: ParsedToken[]): ParsedToken[][] => {
-    const segments: ParsedToken[][] = [];
-    let current: ParsedToken[] = [];
-    for (const tok of tokens) {
-        if (typeof tok === "object" && tok !== null && "op" in tok) {
-            if (current.length > 0) {
-                segments.push(current);
-            }
-            current = [];
-            continue;
-        }
-        current.push(tok);
-    }
-    if (current.length > 0) {
-        segments.push(current);
-    }
-    return segments;
+	const segments: ParsedToken[][] = [];
+	let current: ParsedToken[] = [];
+	for (const tok of tokens) {
+		if (typeof tok === "object" && tok !== null && "op" in tok) {
+			if (current.length > 0) {
+				segments.push(current);
+			}
+			current = [];
+			continue;
+		}
+		current.push(tok);
+	}
+	if (current.length > 0) {
+		segments.push(current);
+	}
+	return segments;
 };
 
-const collectFetchBinsFromAst = (tokens: ParsedToken[]): string[] => {
-    const bins: string[] = [];
-    const segments = splitByOperators(tokens);
-    for (const seg of segments) {
-        const { found } = containsFetchBin(seg);
-        if (found) {
-            bins.push(found);
-        }
-        // Inspect command-substitution payloads recursively: shell-quote represents
-        // them as { op: '$()' , … } in some cases, but the simpler representation
-        // tokenises the inner string — so also re-parse any string token that looks
-        // like it embeds $() / `…`.
-        for (const tok of seg) {
-            if (
-                typeof tok === "string" &&
-                (tok.includes("$(") || tok.includes("`"))
-            ) {
-                const inner = extractCommandSubstitutions(tok);
-                for (const sub of inner) {
-                    try {
-                        const subTokens = parse(sub) as ParsedToken[];
-                        bins.push(...collectFetchBinsFromAst(subTokens));
-                    } catch {
-                        // unparseable substitution — already handled at top level
-                    }
-                }
-            }
-        }
-    }
-    return bins;
+interface AstScan {
+	bins: string[];
+	writesToFile: boolean;
+}
+
+const collectFetchBinsFromAst = (tokens: ParsedToken[]): AstScan => {
+	const bins: string[] = [];
+	let writesToFile = false;
+	const segments = splitByOperators(tokens);
+	for (const seg of segments) {
+		const found = containsFetchBin(seg);
+		if (found) {
+			bins.push(found);
+			if (segmentWritesToFile(seg)) {
+				writesToFile = true;
+			}
+		}
+		// Inspect command-substitution payloads recursively: shell-quote represents
+		// them as { op: '$()' , … } in some cases, but the simpler representation
+		// tokenises the inner string — so also re-parse any string token that looks
+		// like it embeds $() / `…`.
+		for (const tok of seg) {
+			if (
+				typeof tok === "string" &&
+				(tok.includes("$(") || tok.includes("`"))
+			) {
+				const inner = extractCommandSubstitutions(tok);
+				for (const sub of inner) {
+					try {
+						const subTokens = parse(sub) as ParsedToken[];
+						const scan = collectFetchBinsFromAst(subTokens);
+						bins.push(...scan.bins);
+						writesToFile ||= scan.writesToFile;
+					} catch {
+						// unparseable substitution — already handled at top level
+					}
+				}
+			}
+		}
+	}
+	return { bins, writesToFile };
 };
 
 const extractCommandSubstitutions = (s: string): string[] => {
-    const out: string[] = [];
-    let i = 0;
-    while (i < s.length) {
-        if (s[i] === "$" && s[i + 1] === "(") {
-            let depth = 1;
-            let j = i + 2;
-            while (j < s.length && depth > 0) {
-                if (s[j] === "(") {
-                    depth++;
-                } else if (s[j] === ")") {
-                    depth--;
-                }
-                j++;
-            }
-            if (depth === 0) {
-                out.push(s.slice(i + 2, j - 1));
-            }
-            i = j;
-        } else if (s[i] === "`") {
-            const j = s.indexOf("`", i + 1);
-            if (j === -1) {
-                break;
-            }
-            out.push(s.slice(i + 1, j));
-            i = j + 1;
-        } else {
-            i++;
-        }
-    }
-    return out;
+	const out: string[] = [];
+	let i = 0;
+	while (i < s.length) {
+		if (s[i] === "$" && s[i + 1] === "(") {
+			let depth = 1;
+			let j = i + 2;
+			while (j < s.length && depth > 0) {
+				if (s[j] === "(") {
+					depth++;
+				} else if (s[j] === ")") {
+					depth--;
+				}
+				j++;
+			}
+			if (depth === 0) {
+				out.push(s.slice(i + 2, j - 1));
+			}
+			i = j;
+		} else if (s[i] === "`") {
+			const j = s.indexOf("`", i + 1);
+			if (j === -1) {
+				break;
+			}
+			out.push(s.slice(i + 1, j));
+			i = j + 1;
+		} else {
+			i++;
+		}
+	}
+	return out;
+};
+
+// shell-quote parses an unterminated quote without complaining, but wrapping
+// such a command in `( … ) | sanitiser` changes what the shell actually runs —
+// the trailing paren and pipe get swallowed by the open quote. Detect it and
+// decline to rewrite rather than emit a command that means something else.
+export const hasUnbalancedQuotes = (raw: string): boolean => {
+	let inSingle = false;
+	let inDouble = false;
+	for (let i = 0; i < raw.length; i++) {
+		const c = raw[i];
+		if (c === "\\" && !inSingle) {
+			i++;
+			continue;
+		}
+		if (c === "'" && !inDouble) {
+			inSingle = !inSingle;
+		} else if (c === '"' && !inSingle) {
+			inDouble = !inDouble;
+		}
+	}
+	return inSingle || inDouble;
 };
 
 export const matchBashCommand = (raw: string): BashMatch => {
-    let tokens: ParsedToken[];
-    try {
-        tokens = parse(raw) as ParsedToken[];
-    } catch (err) {
-        return {
-            matched: false,
-            bins: [],
-            interpreterDetected: false,
-            rewrittenCommand: null,
-            parseFailed: true,
-            reason: (err as Error).message,
-        };
-    }
+	if (hasUnbalancedQuotes(raw)) {
+		return {
+			matched: false,
+			bins: [],
+			interpreterDetected: false,
+			writesToFile: false,
+			rewrittenCommand: null,
+			parseFailed: true,
+			reason:
+				"unbalanced quotes — rewriting would change the command's meaning",
+		};
+	}
 
-    const bins: string[] = [];
+	let tokens: ParsedToken[];
+	try {
+		tokens = parse(raw) as ParsedToken[];
+	} catch (err) {
+		return {
+			matched: false,
+			bins: [],
+			interpreterDetected: false,
+			writesToFile: false,
+			rewrittenCommand: null,
+			parseFailed: true,
+			reason: (err as Error).message,
+		};
+	}
 
-    // Check for `bash -c "…"` / `sh -c "…"` and recurse into the inner command
-    if (tokens.length >= 3) {
-        const head = typeof tokens[0] === "string" ? tokens[0] : null;
-        const flag = typeof tokens[1] === "string" ? tokens[1] : null;
-        const inner = typeof tokens[2] === "string" ? tokens[2] : null;
-        if (
-            head &&
-            flag === "-c" &&
-            inner &&
-            /^(?:bash|sh|zsh|dash)$/.test(head.split("/").pop() ?? head)
-        ) {
-            try {
-                const innerTokens = parse(inner) as ParsedToken[];
-                bins.push(...collectFetchBinsFromAst(innerTokens));
-            } catch {
-                return {
-                    matched: false,
-                    bins: [],
-                    interpreterDetected: false,
-                    rewrittenCommand: null,
-                    parseFailed: true,
-                    reason: "bash -c inner unparseable",
-                };
-            }
-        }
-    }
+	const bins: string[] = [];
+	let writesToFile = false;
 
-    bins.push(...collectFetchBinsFromAst(tokens));
+	// Check for `bash -c "…"` / `sh -c "…"` and recurse into the inner command
+	if (tokens.length >= 3) {
+		const head = asString(tokens[0]);
+		const flag = asString(tokens[1]);
+		const inner = asString(tokens[2]);
+		if (
+			head &&
+			flag === "-c" &&
+			inner &&
+			/^(?:bash|sh|zsh|dash|ksh)$/.test(basenameOf(head))
+		) {
+			try {
+				const innerTokens = parse(inner) as ParsedToken[];
+				const scan = collectFetchBinsFromAst(innerTokens);
+				bins.push(...scan.bins);
+				writesToFile ||= scan.writesToFile;
+			} catch {
+				return {
+					matched: false,
+					bins: [],
+					interpreterDetected: false,
+					writesToFile: false,
+					rewrittenCommand: null,
+					parseFailed: true,
+					reason: "bash -c inner unparseable",
+				};
+			}
+		}
+	}
 
-    const dedup = [...new Set(bins)];
-    if (dedup.length === 0) {
-        return {
-            matched: false,
-            bins: [],
-            interpreterDetected: false,
-            rewrittenCommand: null,
-            parseFailed: false,
-            reason: null,
-        };
-    }
+	const topScan = collectFetchBinsFromAst(tokens);
+	bins.push(...topScan.bins);
+	writesToFile ||= topScan.writesToFile;
 
-    const interpreterDetected = dedup.some((b) => INTERPRETER_BINS.has(b));
+	const dedup = [...new Set(bins)];
+	if (dedup.length === 0) {
+		return {
+			matched: false,
+			bins: [],
+			interpreterDetected: false,
+			writesToFile: false,
+			rewrittenCommand: null,
+			parseFailed: false,
+			reason: null,
+		};
+	}
 
-    // Conservative rewrite: wrap the whole command with a pipe through claude-sanitize.
-    // Subshell containment ensures pipefail / set -e in the parent shell don't
-    // change semantics; we deliberately don't try to surgically splice the AST
-    // since shell-quote doesn't round-trip lossless across all input shapes.
-    // If the command already contains operators we still wrap — sanitiser
-    // operates on stdout regardless of upstream complexity.
-    const rewritten = `( ${raw} ) | ${quote([SANITIZER_BIN, "--url=bash-stdin"])}`;
+	const interpreterDetected = dedup.some((b) => INTERPRETER_BINS.has(b));
 
-    return {
-        matched: true,
-        bins: dedup,
-        interpreterDetected,
-        rewrittenCommand: rewritten,
-        parseFailed: false,
-        reason: null,
-    };
+	// Conservative rewrite: wrap the whole command with a pipe through claude-sanitize.
+	// Subshell containment ensures pipefail / set -e in the parent shell don't
+	// change semantics; we deliberately don't try to surgically splice the AST
+	// since shell-quote doesn't round-trip lossless across all input shapes.
+	// pipefail is set inside the subshell so a failed fetch still surfaces as a
+	// non-zero exit — without it the sanitiser's own exit code masks the failure.
+	const rewritten = `set -o pipefail; ( ${raw} ) | ${quote([SANITIZER_BIN, "--url=bash-stdin"])}`;
+
+	return {
+		matched: true,
+		bins: dedup,
+		interpreterDetected,
+		writesToFile,
+		rewrittenCommand: rewritten,
+		parseFailed: false,
+		reason: null,
+	};
 };

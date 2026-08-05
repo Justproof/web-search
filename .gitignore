@@ -1,3 +1,6 @@
 # Local runtime artifacts from hook invocations
 pre-log.json
 post-log.json
+
+# Dependencies. bun.lock IS tracked — CI installs with --frozen-lockfile.
+node_modules/

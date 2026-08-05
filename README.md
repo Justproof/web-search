@@ -74,11 +74,19 @@ Start a fresh Claude Code session:
 fetch https://example.com and summarize it
 ```
 
-You should see the response wrapped in `<untrusted_source url="https://example.com" sanitiser_version="1.0.0" ...>` tags. Or check the state database directly:
+You should see the response wrapped in `<untrusted_source url="https://example.com" sanitiser_version="1.1.0" nonce="..." ...>` tags. Or check the state database directly:
 
 ```bash
 ~/.claude/bin/claude-sanitize status
 ```
+
+Run the test suite against a checkout:
+
+```bash
+cd hooks && bun install && bun test
+```
+
+To remove everything: `./install.sh --uninstall` (add `--purge` to delete the state database too).
 
 ---
 
@@ -151,17 +159,20 @@ A developer has been running Claude in auto mode for two weeks and just updated 
 Every web fetch goes through two checkpoints:
 
 **Pre-hook** — before the request:
-- URL-level checks: homoglyphs, non-ASCII hostnames, embedded credentials, zero-width chars in host or path, multi-`@` authority tricks — hard deny, no fetch
-- `robots.txt` fetch and cache (24h TTL); advisory reminder if the path is disallowed for AI agents — the hook does not block, Claude decides whether to proceed
+- URL-level checks: literal homoglyphs, **pre-encoded punycode homoglyphs** (`xn--pypal-4ve.com` → `раypal.com`, and whole-script spoofs like `xn--80ak6aa92e.com` → `аррӏе.com`), embedded credentials, invisible chars in host or path, multi-`@` authority tricks, non-web schemes — hard deny, no fetch
+- `robots.txt` fetch and cache (24h TTL), parsed with `Allow`/`Disallow` precedence and `*`/`$` wildcards. A group naming an AI crawler (`ClaudeBot`, `GPTBot`, `Google-Extended`, …) is reported as a stated position on AI access; the hook does not block, Claude decides
+- Blocklisted domains (and their subdomains) trigger a permission **prompt** rather than a reminder — an abort-unless-overridden rule should require a human, not a model's discretion
 - Search queries are never treated as fetches: `WebSearch` skips the robots.txt and URL gates (those apply when a result is fetched) and just counts toward the per-session skill reminder
-- Bash command rewriting: `curl`, `wget`, `wget2`, `aria2c`, `httpie`, `lynx`, `w3m`, and interpreter one-liners (Python/Node/Ruby/Perl/PHP with inline URL) get piped through `claude-sanitize`
+- Bash command rewriting: `curl`, `wget`, `xh`, `httpie`, `aria2c`, `lynx`, `w3m`, `links`, and interpreter one-liners (Python/Node/Bun/Deno/Ruby/Perl/PHP with inline URL) get piped through `claude-sanitize` — including behind wrappers (`command`, `env`, `timeout`, `sudo`, `nohup`, `exec`, `nice`), inside `bash -c`, in `$(…)`, and via `xargs`
 - Trusted domains in the `meta_allowlist` have a single `injection_phrase` signal downgraded from Critical abort to advisory — useful for security research and documentation sites
 
 **Post-hook** — after the response:
-- Strips scripts, hidden elements, event handlers, and zero-width characters (in `enforce` mode); `<header>` and `<footer>` tags are intentionally preserved — they carry bylines, dates, and citations inside articles that stripping would destroy
-- Computes risk signals (injection phrases, cloaking, oversized responses, tarpit patterns)
-- Runs a parallel refetch to detect cloaking (the page serving different content to Claude than to a browser); reports simhash distance and threshold in the advisory
-- Vets the URLs inside search results (first 50 distinct): blocklisted domains and URLs failing the homoglyph/credential/zero-width checks fire Elevated signals and an advisory naming the results Claude must not open
+- Strips scripts, hidden elements (including `hidden`, off-screen, and zero-size CSS), event handlers, and the full invisible-Unicode range — zero-width, bidi controls, variation selectors, and the U+E0000 tag-character smuggling channel. `<header>` and `<footer>` are intentionally preserved — they carry bylines, dates, and citations inside articles that stripping would destroy
+- Neutralises wrapper-shaped markup in the body, so a page cannot close its own `<untrusted_source>` block or forge a `<safe_research_summary>` verdict; the opening and closing tags carry a matching random nonce
+- Computes risk signals (injection phrases matched against a **normalised** body, cloaking, oversized responses, tarpit patterns)
+- Runs a parallel refetch to detect cloaking; refuses to issue that unattended request to private, loopback, or link-local targets, re-checks every redirect hop, and caps how much it will read
+- Vets the URLs inside search results (first 50 distinct): blocklisted domains and URLs failing the URL checks fire Elevated signals and an advisory naming the results Claude must not open
+- Promotes a domain to a session-scoped blocklist after repeated aborts against it (default 3), so the next fetch needs user approval
 - Wraps everything in `<untrusted_source>` with signal metadata; in `log` mode the wrapper includes a `rules_pending` attribute listing what would have been stripped
 
 **Skill** — when Claude reads the result:
@@ -175,7 +186,9 @@ Every web fetch goes through two checkpoints:
 
 **Critical** (any one = abort):
 
-- `injection_phrase` — matches curated prompt-injection patterns
+- `injection_phrase` — matches curated prompt-injection patterns, after normalising away invisible characters, NFKC forms, and Cyrillic/Greek homoglyphs, so `ig<ZWSP>nore previous instructions` and `ignоre` (Cyrillic о) both match
+- `wrapper_escape_attempt` — the page contained markup shaped like a closing wrapper tag or a forged control block. No benign cause exists
+- `unicode_tag_chars` — U+E0000–E007F tag characters, the invisible ASCII smuggling channel; the advisory reports the decoded payload
 - `cloaking_suspected` — parallel refetch diverged from the agent's fetch
 - `oversized_response` — above size cap
 - `repeating_substring_ratio_high` — Markov-style repetition (poisoning / honeypot)
@@ -184,6 +197,7 @@ Every web fetch goes through two checkpoints:
 **Elevated** (three or more = abort):
 
 - `zero_width_chars`
+- `bidi_control_chars` — bidirectional overrides that reorder rendered text (trojan-source)
 - `hidden_content_ratio_high`
 - `redirect_chain_long` (> 5 hops)
 - `content_type_mismatch`
@@ -197,12 +211,17 @@ Tier assignments live in `skills/safe-web-research/risk-tiers.json` and can be o
 
 ## Modes
 
+### The constraint you need to know first
+
+Claude Code does **not** let a `PostToolUse` hook replace the result of a built-in tool ([anthropics/claude-code#32105](https://github.com/anthropics/claude-code/issues/32105)). For `WebFetch` and `WebSearch`, the raw response reaches the model no matter what this project does; the hook's sanitised copy arrives *alongside* it. MCP tool output *can* be replaced, so for browser/scraper MCP tools the stripping is real.
+
+That constraint is why there are three modes rather than two, and why `enforce` does not claim to remove anything from a built-in tool's output.
+
 | Mode | Behavior |
 | --- | --- |
-| `enforce` (default) | Returns sanitized + wrapped responses. Scripts, style blocks, iframes, hidden elements, event handlers, boilerplate tags (`nav`, `noscript`, `svg`, `aside`), and zero-width chars are stripped before Claude reads a single byte. `<header>` and `<footer>` are preserved — they carry bylines, dates, and citations. |
-| `log` | Computes signals and wraps content, but passes the **original** bytes through. The wrapper includes a `rules_pending` attribute listing what would have been stripped. Useful during development to understand signal frequency without affecting output. |
-
-`enforce` is the default because `log` mode leaves adversarial bytes in context and relies entirely on Claude's self-reminder rule to resist them — a reasoning layer, not a hard filter. Novel injection phrasings that slip past the pattern matcher still reach the model in full. `enforce` removes the content before reasoning begins, so pattern-list gaps cannot be exploited. Use `log` only when debugging sanitiser behavior.
+| `enforce` (default) | Emits the `<untrusted_source>` wrapper, the risk verdict, and — only when the sanitised bytes actually differ from what the tool returned — the sanitised copy, with an instruction to prefer it and treat raw-only content as hostile. Real replacement for MCP tools; evidence-plus-advisory for built-ins. Identical bodies are never duplicated, so a clean fetch costs no extra tokens. |
+| `strict` | The pre-hook **denies** `WebFetch` and the browser read tools and points Claude at `curl … \| claude-sanitize`, the one path where the sanitiser controls the bytes the model sees. `WebSearch` still runs (no shell equivalent exists) and is still wrapped and scored. Choose this if you want stripping to be more than advisory. |
+| `log` | Computes signals and wraps metadata, but strips nothing and emits no sanitised copy. The wrapper lists what *would* have been stripped in `rules_pending`. For understanding signal frequency on your own traffic. |
 
 Set it in each hook command in `~/.claude/settings.json` (the installer does this automatically):
 
@@ -210,8 +229,7 @@ Set it in each hook command in `~/.claude/settings.json` (the installer does thi
 "command": "CLAUDE_SANITISER_MODE=enforce $HOME/.bun/bin/bun run $HOME/.claude/hooks/web-fetch-post.ts"
 ```
 
-To temporarily revert to log mode for debugging, change `enforce` to `log` in both hook entries in `settings.json`.
-```
+Or install directly into the mode you want: `./install.sh --mode strict`.
 
 ---
 
