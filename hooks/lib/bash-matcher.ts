@@ -320,13 +320,24 @@ export const stripQuotedHeredocBodies = (raw: string): string => {
 // Cheap pre-check: does this command plausibly touch the network at all? Used
 // to keep the unparseable-command advisory off the ~99% of Bash calls that
 // have nothing to do with fetching, where it is pure noise.
-export const looksLikeFetch = (raw: string): boolean => {
-	if (/\bhttps?:\/\//i.test(raw)) {
-		return true;
-	}
-	const names = [...FETCH_BINS, ...INTERPRETER_BINS].join("|");
-	return new RegExp(`(^|[;&|(]\\s*|\\s)(${names})\\s`, "i").test(raw);
-};
+//
+// A URL scheme is the primary trigger. The first version also matched any
+// fetch or interpreter binary appearing anywhere in the string, which meant
+// `bun run x.ts` and a commit message mentioning curl both tripped it.
+//
+// Requiring a URL and nothing else would be too tight in one specific way:
+// `curl "$URL` — unparseable, genuinely a fetch, no literal scheme — would go
+// unmentioned, and an unwrappable fetch is exactly what the advisory exists to
+// flag. So a fetch binary still counts, but only in COMMAND position: at the
+// start, after a shell operator, or directly behind a wrapper like sudo/env.
+// A bare mention inside an argument or a message no longer qualifies.
+const COMMAND_POSITION_FETCH_RE = new RegExp(
+	`(?:^|[\\n;&|(]|\\b(?:${[...WRAPPER_BINS].join("|")})\\s+)\\s*(?:[\\w./-]*/)?(?:${[...FETCH_BINS].join("|")})(?:\\s|$)`,
+	"i",
+);
+
+export const looksLikeFetch = (raw: string): boolean =>
+	/\bhttps?:\/\//i.test(raw) || COMMAND_POSITION_FETCH_RE.test(raw);
 
 // shell-quote parses an unterminated quote without complaining, but wrapping
 // such a command in `( … ) | sanitiser` changes what the shell actually runs —

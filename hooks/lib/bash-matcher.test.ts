@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchBashCommand } from "./bash-matcher.ts";
+import { looksLikeFetch, matchBashCommand } from "./bash-matcher.ts";
 
 const bins = (cmd: string) => matchBashCommand(cmd).bins;
 
@@ -114,6 +114,29 @@ describe("rewrite", () => {
 			false,
 		);
 		expect(matchBashCommand(`curl "https://x.test`).possibleFetch).toBe(true);
+	});
+});
+
+describe("looksLikeFetch", () => {
+	test.each([
+		["a literal URL anywhere", "deno run --allow-net https://x.test/a.ts"],
+		["fetch bin at the start", `curl "$URL`],
+		["fetch bin after an operator", `cat f | curl -d @- "$DEST`],
+		["fetch bin behind a wrapper", `sudo curl "$URL`],
+		["fetch bin with a path prefix", `/usr/bin/curl "$URL`],
+	])("fires on %s", (_label, cmd) => {
+		expect(looksLikeFetch(cmd)).toBe(true);
+	});
+
+	test.each([
+		["an interpreter running a script file", "bun run hooks/web-fetch-pre.ts"],
+		["node on a local file", "node scripts/build.js"],
+		["a bin name mentioned in a message", `git commit -m "see the curl docs"`],
+		["a bin name inside an argument", "rg --files-with-matches wget src/"],
+		["a word merely containing a bin name", "./curlicue-generator --run"],
+		["ordinary work", "ls -la && git status"],
+	])("stays quiet on %s", (_label, cmd) => {
+		expect(looksLikeFetch(cmd)).toBe(false);
 	});
 
 	test("reports unparseable input instead of silently passing", () => {
