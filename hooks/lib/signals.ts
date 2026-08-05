@@ -155,8 +155,15 @@ export const computeSignals = (ctx: SignalContext): SignalResult => {
 		detail.oversized_response = ctx.originalBytes;
 	}
 
-	// repeating_substring_ratio_high (cheap autocorrelation proxy: longest repeated 16-gram density)
-	const repeatRatio = repeatingSubstringRatio(ctx.body);
+	// repeating_substring_ratio_high (cheap autocorrelation proxy: repeated
+	// 16-gram density). Measured over VISIBLE TEXT, not raw bytes: markup
+	// repeats by nature — nav lists, attribute soup, link boilerplate — so the
+	// raw measure scored how templated a page is rather than how repetitive its
+	// content is. Measured on the corpus: python.org docs 0.538 raw (fired,
+	// Critical, aborting the official Python documentation) vs 0.226 on text;
+	// Wikipedia 0.430 raw, one nav link short of the same fate. A real tarpit
+	// scores ~1.0 either way.
+	const repeatRatio = repeatingSubstringRatio(visibleTextFor(ctx.body));
 	detail.repeat_ratio = repeatRatio;
 	if (repeatRatio > t.repeating_substring_ratio_max) {
 		fired.push("repeating_substring_ratio_high");
@@ -266,6 +273,21 @@ export const partitionByTier = (
 	}
 	return { critical, elevated, unknown };
 };
+
+// Strip tags so the repetition measure sees prose rather than markup. Bounded
+// well above the 32 KB the ratio actually samples; non-HTML bodies (plain text,
+// JSON) pass through essentially untouched.
+const visibleTextFor = (body: string): string =>
+	body
+		.slice(0, 200_000)
+		// Script and style BODIES have to go before tags are stripped: minified
+		// CSS and JS repeat heavily, and stripping only the tags would leave
+		// that text in the sample — a page with a big stylesheet would score as
+		// a tarpit on the strength of its CSS.
+		.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+		.replace(/<[^>]+>/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 
 const repeatingSubstringRatio = (s: string): number => {
 	if (s.length < 256) {

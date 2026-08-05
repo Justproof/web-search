@@ -1,0 +1,58 @@
+{
+    "_comment": "Expectations for the frozen real-page snapshots in fixtures/real. Authored from measured behaviour, not guessed. The retention band is the guard against silent content destruction: a void-element bug once cut a 297 KB article to 3.4 KB (retention 0.011) while every unit test passed. Bands are deliberately wide enough to survive normal rule tuning and tight enough to catch a collapse. Refresh with: bun run fixtures/capture.ts",
+
+    "example-com": {
+        "_note": "Minimal HTML that is mostly a <style> block. Fired hidden_content_ratio_high until the ratio was scoped to concealment rules.",
+        "retention": [0.6, 0.8],
+        "mustContain": ["Example Domain", "documentation examples"],
+        "mustNotContain": ["<style", "data:"],
+        "signals": [],
+        "verdict": "Clean"
+    },
+
+    "wikipedia-article": {
+        "_note": "Large article: heavy nav, many genuinely hidden elements, void tags. Exposed the truncation bug (retention was 0.011).",
+        "retention": [0.7, 0.95],
+        "mustContain": [
+            "robots.txt",
+            "Robots Exclusion Protocol",
+            "From Wikipedia, the free encyclopedia"
+        ],
+        "mustNotContain": ["<script", "<nav"],
+        "signals": [],
+        "verdict": "Clean"
+    },
+
+    "python-docs": {
+        "_note": "Technical documentation. Scored 0.538 on raw-byte repetition and was ABORTED as a tarpit until the measure moved to visible text.",
+        "retention": [0.7, 0.95],
+        "mustContain": ["robotparser", "RobotFileParser"],
+        "mustNotContain": ["<script"],
+        "signals": [],
+        "verdict": "Clean"
+    },
+
+    "iana-page": {
+        "_note": "Small institutional page with ordinary site furniture.",
+        "retention": [0.6, 0.9],
+        "mustContain": ["Example Domains"],
+        "signals": [],
+        "verdict": "Clean"
+    },
+
+    "rfc-plaintext": {
+        "_note": "text/plain. No markup exists, so no rule may remove a single byte.",
+        "retention": [1.0, 1.0],
+        "mustContain": ["Robots Exclusion Protocol", "Internet Engineering Task Force"],
+        "signals": [],
+        "verdict": "Clean"
+    },
+
+    "json-api": {
+        "_note": "Structured non-HTML. Must pass through byte-identical; its 0.40 text repetition is the closest legitimate case to the tarpit threshold.",
+        "retention": [1.0, 1.0],
+        "mustContain": ["current_user_url"],
+        "signals": [],
+        "verdict": "Clean"
+    }
+}

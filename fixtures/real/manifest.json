@@ -1,0 +1,56 @@
+{
+    "example-com": {
+        "url": "https://example.com/",
+        "note": "Minimal HTML. Mostly a <style> block — the page that exposed the hidden_content_ratio false positive.",
+        "captured_at": "2026-08-05",
+        "status": 200,
+        "content_type": "text/html",
+        "raw_bytes": 559,
+        "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d"
+    },
+    "wikipedia-article": {
+        "url": "https://en.wikipedia.org/wiki/Robots.txt",
+        "note": "Large encyclopedia article: heavy nav, many hidden elements, void tags. Exposed the void-element truncation bug.",
+        "captured_at": "2026-08-05",
+        "status": 200,
+        "content_type": "text/html; charset=UTF-8",
+        "raw_bytes": 303813,
+        "sha256": "3bda9bc714e6d7b13e89f5e4ebcf7fa479ee327ee36ff0b47d8e4b7953a62530"
+    },
+    "python-docs": {
+        "url": "https://docs.python.org/3/library/urllib.robotparser.html",
+        "note": "Technical documentation: sidebars, code blocks, cross-reference chrome.",
+        "captured_at": "2026-08-05",
+        "status": 200,
+        "content_type": "text/html",
+        "raw_bytes": 27842,
+        "sha256": "b8cb57b601c702b208f2602e36617b054227e481a0be147853b3eb25060bbe53"
+    },
+    "iana-page": {
+        "url": "https://www.iana.org/help/example-domains",
+        "note": "Small institutional HTML page with ordinary site furniture.",
+        "captured_at": "2026-08-05",
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "raw_bytes": 6639,
+        "sha256": "4142da6d9cc75147bb23d15b735a5f6a472551177bda1eef62a0096c702d6e53"
+    },
+    "rfc-plaintext": {
+        "url": "https://www.rfc-editor.org/rfc/rfc9309.txt",
+        "note": "text/plain. No markup at all — nothing should ever be stripped.",
+        "captured_at": "2026-08-05",
+        "status": 200,
+        "content_type": "text/plain;charset=utf-8",
+        "raw_bytes": 25262,
+        "sha256": "1f3a8a5d5c660312b1e3de513d9d4a9411fd2f3404e54d1c5d3d7701e916d8fb"
+    },
+    "json-api": {
+        "url": "https://api.github.com/",
+        "note": "A JSON API response, to confirm structured non-HTML passes through intact.",
+        "captured_at": "2026-08-05",
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "raw_bytes": 2396,
+        "sha256": "a9be2dad521baf86136d287fcc7898e3e6f51fa2122a2f672b8d7ce3584516cd"
+    }
+}

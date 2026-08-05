@@ -3,7 +3,8 @@
     "comment": "Risk-tier assignments per FR-8. This file is the single source of truth: the hooks read it on every invocation, so edits take effect without a restart. Per-domain threshold overrides go under per_domain_overrides. Signals that fire without an entry in `signals` default to Elevated.",
     "thresholds": {
         "oversized_response_bytes": 5242880,
-        "repeating_substring_ratio_max": 0.45,
+        "_comment_repeating_substring_ratio_max": "Measured over visible text, not raw markup. Observed on the fixture corpus: ordinary prose 0.00-0.23, a repetitive JSON API 0.40, a Markov tarpit 0.997. 0.6 sits in the gap with margin on both sides.",
+        "repeating_substring_ratio_max": 0.6,
         "url_cardinality_explosion_count": 30,
         "url_cardinality_explosion_window_minutes": 5,
         "zero_width_chars_max": 3,

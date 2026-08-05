@@ -34,7 +34,20 @@ Ready to set it up? Grab a coffee and follow along. This takes about five minute
 
 The hooks handle mechanics. The skill handles reasoning. Neither can be argued out of its job by a web page.
 
-Everything is covered by a test suite — 115 unit and subprocess-integration tests, run in CI on every push — including an adversarial corpus of wrapper-escape pages, zero-width and homoglyph obfuscation, and shell-command bypasses.
+Everything is covered by a test suite — 157 tests, run in CI on every push: unit tests per rule, subprocess-integration tests that run the hooks the way Claude Code runs them, and a fixture corpus (below).
+
+### The fixture corpus
+
+`fixtures/` holds frozen snapshots of six real pages — a minimal page, a 297 KB Wikipedia article, technical docs, an institutional site, a plain-text RFC, and a JSON API — plus twelve handcrafted adversarial pages, each aimed at one detection or one past bug.
+
+It exists because the two worst bugs this project has had were invisible to unit tests. A signal fired on every styled page, and a single `<img aria-hidden="true">` deleted 98% of an article — each rule passed its own test while the pipeline destroyed real pages. Every fixture asserts a **content-retention band**, so a collapse fails CI instead of failing silently in your context window.
+
+```bash
+cd hooks && bun test              # includes the corpus
+bun run fixtures/capture.ts       # re-capture the real pages (network; run by hand)
+```
+
+The snapshots are deliberately frozen: CI must not depend on the live internet, and a page changing under you should be a deliberate re-capture, not a mystery failure. `fixtures/real/manifest.json` records each source URL, capture date, and SHA-256.
 
 ---
 
