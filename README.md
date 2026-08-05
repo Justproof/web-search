@@ -11,8 +11,10 @@ Without guardrails, it will cheerfully read a shady webpage that opens with "ign
 
 **Safe Web Research** fixes that with two quiet layers:
 
-- **Custom TypeScript hooks** that intercept, inspect, and clean every web response before Claude reads a single byte.
+- **Custom TypeScript hooks** that intercept every web request and response, refuse hostile URLs outright, strip the dangerous parts, and label what's left as untrusted.
 - **A clear judgment skill** that helps Claude spot trouble and respond wisely instead of blind trust.
+
+One caveat stated up front, because it shapes everything below: Claude Code does not let a hook replace the result of a *built-in* tool, so for `WebFetch` and `WebSearch` the raw response reaches Claude no matter what this project does — the sanitised copy and the risk verdict arrive alongside it. Shell fetches and MCP browser tools *are* fully controlled. If you want the stripping to be real rather than advisory, `strict` mode routes everything down the path where it is. See [Modes](#modes).
 
 No paranoia. Just everyday common sense, like sending a teenager out for milk and your certain they are not distracted or completing 8 side missions . Claude stays helpful and fast. It just stops being gullible.
 
@@ -26,10 +28,13 @@ Ready to set it up? Grab a coffee and follow along. This takes about five minute
 
 | Component | What it does |
 | --- | --- |
-| **Hooks** (`PreToolUse` + `PostToolUse`) | Intercept `WebFetch`, `WebSearch`, `curl`/`wget`/`wget2`/`aria2c`/`httpie` in Bash, interpreter one-liners (Python, Node, Ruby, Perl, PHP), and browser MCP tools. Check `robots.txt`, detect cloaking and injection attempts, compute risk signals, and wrap all web content in `<untrusted_source>` tags before Claude reads a single byte. |
+| **Hooks** (`PreToolUse` + `PostToolUse`) | Intercept `WebFetch`, `WebSearch`, shell fetches (`curl`, `wget`, `xh`, `curlie`, `httpie`, `aria2c`, `lynx`, `w3m`, `links` — including behind `sudo`/`env`/`timeout` and inside `bash -c`, `$(…)` and `xargs`), interpreter one-liners (Python, Node, Bun, Deno, Ruby, Perl, PHP), and browser MCP tools. Refuse hostile URLs before the request, check `robots.txt`, detect cloaking and injection attempts, compute risk signals, and wrap web content in `<untrusted_source>` tags with a nonce a page can't forge. |
 | **Skill** (`safe-web-research`) | Gives Claude the judgment rules: when to abort a source, how to classify risk signals, what to emit in `<safe_research_summary>` blocks, and how to handle corroboration and output discipline. |
+| **CLI** (`claude-sanitize`) | The same sanitiser as a stdin/stdout filter, plus `status` and `replay`. It's what shell fetches get piped through, and the path `strict` mode routes everything to. |
 
 The hooks handle mechanics. The skill handles reasoning. Neither can be argued out of its job by a web page.
+
+Everything is covered by a test suite — 115 unit and subprocess-integration tests, run in CI on every push — including an adversarial corpus of wrapper-escape pages, zero-width and homoglyph obfuscation, and shell-command bypasses.
 
 ---
 
@@ -94,7 +99,7 @@ To remove everything: `./install.sh --uninstall` (add `--purge` to delete the st
 
 ### The poisoned package README
 
-A developer asks Claude to evaluate an unfamiliar npm package before adding it as a dependency. Claude fetches the package page, the linked GitHub repo, and a few Stack Overflow threads. One of those pages — maybe the package's own README, maybe a tutorial — opens with content designed to redirect Claude's behavior. Without guardrails, Claude reads it and follows along. With the hook, every response is wrapped in `<untrusted_source>` before Claude reads a byte, and injection phrases fire a Critical signal that aborts the source before Claude quotes a word of it. The research completes. The poisoned page has zero influence on the output.
+A developer asks Claude to evaluate an unfamiliar npm package before adding it as a dependency. Claude fetches the package page, the linked GitHub repo, and a few Stack Overflow threads. One of those pages — maybe the package's own README, maybe a tutorial — opens with content designed to redirect Claude's behavior. Without guardrails, Claude reads it and follows along. With the hook, the response is wrapped in `<untrusted_source>` and carries a verdict, and injection phrases fire a Critical signal that aborts the source before Claude quotes a word of it. The match runs against a normalised copy of the page, so hiding a zero-width space inside the phrase — or swapping one Latin letter for its Cyrillic twin — doesn't get it past the filter. The research completes. The poisoned page has zero influence on the output.
 
 ```
 what does the "event-stream" npm package do and is it safe to use?
@@ -114,7 +119,9 @@ compare the architecture of three popular background job libraries for Node.js
 
 ### A link arrives from somewhere you don't fully trust
 
-A URL shows up in a Slack message, a bug report, or a client email. Before Claude makes any network request, the pre-hook inspects the raw URL string — not the parsed version, the raw string. Embedded credentials, lookalike Unicode hostname characters, zero-width chars in the path, and multi-`@` authority tricks are refused before a single byte leaves the machine. The attack surface that exists before the page even loads is closed entirely.
+A URL shows up in a Slack message, a bug report, or a client email. Before Claude makes any network request, the pre-hook inspects the raw URL string — not the parsed version, the raw string. Embedded credentials, lookalike Unicode hostname characters, invisible chars in the path, and multi-`@` authority tricks are refused before a single byte leaves the machine.
+
+Punycode gets decoded rather than trusted, which matters because a hostname does not have to *contain* a Cyrillic character to be a homoglyph — it can arrive pre-encoded. `xn--pypal-4ve.com` is `раypal.com`, and `xn--80ak6aa92e.com` is `аррӏе.com`: the second is entirely Cyrillic, mixes no scripts at all, and still renders exactly like `apple.com`. Both are refused. The attack surface that exists before the page even loads is closed entirely.
 
 ```
 fetch https://user:pass@httpbin.org/get and summarize it
@@ -132,9 +139,11 @@ Claude is helping debug a build failure and fetches a documentation page. That p
 
 The rewrite is visible in the approval dialog:
 
-`( curl https://example.com/fix.sh ) | ~/.claude/bin/claude-sanitize --url=bash-stdin`
+`set -o pipefail; ( curl https://example.com/fix.sh ) | ~/.claude/bin/claude-sanitize --url=bash-stdin`
 
-Works the same for `wget`, `wget2`, `aria2c`, `httpie`, and Python/Node/Ruby one-liners with a URL in the inline code.
+Works the same for `wget`, `xh`, `curlie`, `httpie`, `aria2c`, `lynx`, `w3m`, `links`, and Python/Node/Bun/Deno/Ruby/Perl/PHP one-liners with a URL in the inline code — and it still fires when the fetch hides behind `sudo`, `env`, `timeout`, `nohup`, `exec` or `nice`, inside `bash -c`, in a `$(…)` substitution, or via `xargs`.
+
+Two limits worth knowing. A command that writes to a file (`curl -o`, `wget -O`) sends nothing through stdout, so those bytes are never sanitised — the hook says so, and tells Claude to re-read the file through `claude-sanitize` before trusting it. And network calls inside a *script file* (`python3 fetch.py`) are opaque to the matcher; only inline `-c`/`-e` code is inspected.
 
 ---
 
@@ -143,11 +152,11 @@ Works the same for `wget`, `wget2`, `aria2c`, `httpie`, and Python/Node/Ruby one
 A developer has been running Claude in auto mode for two weeks and just updated `risk-tiers.json` to lower the elevated-signal abort threshold. Before deciding whether the change is right, they replay history against the new config to see which past fetches would now be aborted that weren't before. Two fetches from last Tuesday would have been caught — both from a domain that has since shown up in public blocklists. The threshold change is validated and committed.
 
 ```bash
-# see sessions, blocked domains, robots cache, and recent signal activity
+# sanitiser version, active mode, and row counts for the fetch log, blocklist, and sessions
 ~/.claude/bin/claude-sanitize status
 
 # compare stored decisions against current config
-~/.claude/bin/claude-sanitize replay --last=50
+~/.claude/bin/claude-sanitize replay --since=2026-07-22
 ```
 
 `stored_abort` is what the hook decided at fetch time. `current_abort` is what it would decide now. Rows that disagree are the concrete cost or benefit of the config change — before it affects a live session.
@@ -163,7 +172,7 @@ Every web fetch goes through two checkpoints:
 - `robots.txt` fetch and cache (24h TTL), parsed with `Allow`/`Disallow` precedence and `*`/`$` wildcards. A group naming an AI crawler (`ClaudeBot`, `GPTBot`, `Google-Extended`, …) is reported as a stated position on AI access; the hook does not block, Claude decides
 - Blocklisted domains (and their subdomains) trigger a permission **prompt** rather than a reminder — an abort-unless-overridden rule should require a human, not a model's discretion
 - Search queries are never treated as fetches: `WebSearch` skips the robots.txt and URL gates (those apply when a result is fetched) and just counts toward the per-session skill reminder
-- Bash command rewriting: `curl`, `wget`, `xh`, `httpie`, `aria2c`, `lynx`, `w3m`, `links`, and interpreter one-liners (Python/Node/Bun/Deno/Ruby/Perl/PHP with inline URL) get piped through `claude-sanitize` — including behind wrappers (`command`, `env`, `timeout`, `sudo`, `nohup`, `exec`, `nice`), inside `bash -c`, in `$(…)`, and via `xargs`
+- Bash command rewriting: `curl`, `wget`, `xh`, `curlie`, `httpie`, `aria2c`, `lynx`, `w3m`, `links`, and interpreter one-liners (Python/Node/Bun/Deno/Ruby/Perl/PHP with inline URL) get piped through `claude-sanitize` — including behind wrappers (`command`, `env`, `timeout`, `sudo`, `nohup`, `exec`, `nice`), inside `bash -c`, in `$(…)`, and via `xargs`
 - Trusted domains in the `meta_allowlist` have a single `injection_phrase` signal downgraded from Critical abort to advisory — useful for security research and documentation sites
 
 **Post-hook** — after the response:
@@ -205,7 +214,9 @@ Every web fetch goes through two checkpoints:
 - `blocklisted_result_domain` — a search result's domain is blocklisted
 - `suspicious_result_url` — a search result URL fails the homoglyph / credential / zero-width checks
 
-Tier assignments live in `skills/safe-web-research/risk-tiers.json` and can be overridden via the SQLite config.
+Tier assignments, thresholds, the injection-phrase corpus, and the meta-allowlist all live in one file — `~/.claude/skills/safe-web-research/risk-tiers.json`. Edit it there; it is the single source of truth, read fresh on every hook invocation, and no restart is needed. Per-domain threshold overrides go under `per_domain_overrides`.
+
+A signal that fires but has no entry in `signals` is treated as **Elevated** by default, so adding a detection without tiering it fails safe rather than silently doing nothing.
 
 ---
 
@@ -252,7 +263,15 @@ Manually block domains from ever being fetched. Edit `~/.claude/web-blocklist.js
 }
 ```
 
-The hook reconciles this file with its SQLite database on every pre-hook invocation.
+The hook reconciles this file with its SQLite database on every pre-hook invocation. Your edits win: entries here are the source of truth for `source: "user"` rows.
+
+Two things worth knowing about how blocking behaves:
+
+**Subdomains are covered.** Blocking `example-spam-site.com` also blocks `cdn.example-spam-site.com`. Matching walks up the registrable parents, so the blocklist can't be sidestepped with a hostname prefix.
+
+**A blocked domain prompts you rather than warning Claude.** The pre-hook returns an `ask` decision, so the fetch pauses for your approval instead of emitting a reminder Claude could reason its way past. Aborting unless a human overrides is the rule; asking a human is how that gets enforced.
+
+**Repeated aborts blocklist a domain automatically, for the session only.** After three aborted fetches against one domain (`session_blocklist_repeat_threshold`), the post-hook adds a session-scoped entry with a 24-hour expiry and says so. It never writes to this file — promotion to the persistent blocklist stays a decision you make.
 
 ---
 
@@ -264,8 +283,13 @@ Created automatically on first use:
 | --- | --- |
 | `~/.claude/safe-web-research/state.db` | SQLite: sessions, blocklist, robots cache, fetch log |
 | `~/.claude/safe-web-research/fetch-log.jsonl` | Every web fetch and its signals |
+| `~/.claude/safe-web-research/fetch-log-debug.jsonl` | Full request/response bodies — written only when `CLAUDE_SANITISER_DEBUG=1` |
 | `~/.claude/safe-web-research/hook-errors.log` | Hook crash log (should stay empty) |
 | `~/.claude/web-blocklist.json` | Persistent domain blocklist |
+
+The database prunes itself: fetch log rows, sessions, and cached `robots.txt` older than `fetch_log_retention_days` (default 90) are deleted, at most once a day, on a pre-hook run. The blocklist is never pruned apart from entries whose `expires_at` has passed.
+
+Turning on `CLAUDE_SANITISER_DEBUG=1` writes complete page bodies to disk in the clear. It's the right tool for tuning thresholds against real traffic, but treat the debug log as sensitive and delete it when you're done.
 
 ---
 
@@ -275,15 +299,24 @@ Re-classify historical fetches against the current signal tier table:
 
 ```bash
 ~/.claude/bin/claude-sanitize replay --since=2026-01-01
+
+# restrict to rows written by one sanitiser version
+~/.claude/bin/claude-sanitize replay --since=2026-01-01 --version=1.1.0
 ```
 
-Useful for seeing whether threshold changes would have changed any abort decisions.
+Useful for seeing whether threshold changes would have changed any abort decisions. `--since` is required and takes an ISO date; the report counts rows whose verdict would flip in either direction, plus any signal names in the log that the current config no longer defines.
+
+Rows written before the `abort_decision` column existed are reported as `legacy_unknown` — the replay can still re-tier their signals, but it has no stored decision to compare against. Full re-sanitisation of historical bodies needs captures taken with `CLAUDE_SANITISER_DEBUG=1`, since the normal log stores hashes rather than content.
 
 ---
 
 ## Troubleshooting
 
-**Hooks not firing** — confirm `bun` is at `~/.bun/bin/bun` (`which bun`), that `~/.claude/settings.json` is valid JSON, and restart Claude Code after editing settings.
+**`WebFetch` is being denied** — expected in `strict` mode; the denial names the `curl` command to use instead. Switch back with `./install.sh --mode enforce` if it's more friction than you want.
+
+**Hooks not firing** — confirm `bun` is at `~/.bun/bin/bun` (`which bun`), that `~/.claude/settings.json` is valid JSON, and restart Claude Code after editing settings. Mode changes need a fresh session too — the hook command is read at session start.
+
+**`Cannot find module './lib/unicode.ts'` (or `robots.ts`)** — a partial manual install. All eight `lib/` modules are required; re-run `./install.sh`, or copy the missing files.
 
 **`risk-tiers.json not found`** — confirm `~/.claude/skills/safe-web-research/risk-tiers.json` exists.
 
@@ -313,9 +346,11 @@ cp hooks/web-fetch-pre.ts      ~/.claude/hooks/web-fetch-pre.ts
 cp hooks/web-fetch-post.ts     ~/.claude/hooks/web-fetch-post.ts
 cp hooks/lib/bash-matcher.ts   ~/.claude/hooks/lib/bash-matcher.ts
 cp hooks/lib/refetch.ts        ~/.claude/hooks/lib/refetch.ts
+cp hooks/lib/robots.ts         ~/.claude/hooks/lib/robots.ts
 cp hooks/lib/sanitise.ts       ~/.claude/hooks/lib/sanitise.ts
 cp hooks/lib/signals.ts        ~/.claude/hooks/lib/signals.ts
 cp hooks/lib/state.ts          ~/.claude/hooks/lib/state.ts
+cp hooks/lib/unicode.ts        ~/.claude/hooks/lib/unicode.ts
 cp hooks/lib/url-checks.ts     ~/.claude/hooks/lib/url-checks.ts
 cp skills/safe-web-research/SKILL.md        ~/.claude/skills/safe-web-research/SKILL.md
 cp skills/safe-web-research/risk-tiers.json ~/.claude/skills/safe-web-research/risk-tiers.json
@@ -323,10 +358,12 @@ cp bin/claude-sanitize ~/.claude/bin/claude-sanitize
 chmod +x ~/.claude/bin/claude-sanitize
 ```
 
-Or as a one-liner from the repo root:
+All eight `lib/` modules are required — the hooks import each other, so a missing file is an immediate crash rather than a degraded install.
+
+Or as a one-liner from the repo root (the `--exclude` keeps the test suite out of your `~/.claude`):
 
 ```bash
-cp -r hooks/. ~/.claude/hooks/ && \
+rsync -a --exclude='*.test.ts' --exclude='node_modules' hooks/ ~/.claude/hooks/ && \
 cp -r skills/. ~/.claude/skills/ && \
 cp bin/claude-sanitize ~/.claude/bin/ && \
 chmod +x ~/.claude/bin/claude-sanitize
@@ -349,7 +386,7 @@ Open `~/.claude/settings.json`. If it doesn't exist yet (fresh Claude Code insta
     "hooks": {
         "PreToolUse": [
             {
-                "matcher": "WebFetch|WebSearch|Bash|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*",
+                "matcher": "WebFetch|WebSearch|Bash|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests|read_console_messages|javascript_tool|find|browser_batch)|mcp__brightdata__.*",
                 "hooks": [
                     {
                         "type": "command",
@@ -361,7 +398,7 @@ Open `~/.claude/settings.json`. If it doesn't exist yet (fresh Claude Code insta
         ],
         "PostToolUse": [
             {
-                "matcher": "WebFetch|WebSearch|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests)|mcp__brightdata__.*",
+                "matcher": "WebFetch|WebSearch|mcp__claude-in-chrome__(navigate|read_page|get_page_text|read_network_requests|read_console_messages|javascript_tool|find|browser_batch)|mcp__brightdata__.*",
                 "hooks": [
                     {
                         "type": "command",
@@ -375,9 +412,13 @@ Open `~/.claude/settings.json`. If it doesn't exist yet (fresh Claude Code insta
 }
 ```
 
-`PreToolUse` includes `Bash` so `curl`, `wget`, `wget2`, `aria2c`, `httpie`, and interpreter one-liners (Python/Node/Ruby/Perl/PHP with an inline URL) get rewritten to pipe through `claude-sanitize`. `PostToolUse` covers structured web tool responses only.
+`PreToolUse` includes `Bash` so shell fetches and interpreter one-liners get rewritten to pipe through `claude-sanitize`. `PostToolUse` covers structured web tool responses only.
 
-Hooks are fail-open — a hook crash never blocks Claude Code.
+The MCP matcher covers every browser tool that can hand back page-derived text — `javascript_tool`, `find`, `browser_batch` and `read_console_messages` included, since each can return a full page body and would otherwise be an unsanitised route to the same content.
+
+Swap `CLAUDE_SANITISER_MODE=enforce` for `strict` or `log` in both commands to change mode; see [Modes](#modes) for what each one does.
+
+Hooks are fail-open — a hook crash never blocks Claude Code. The skill compensates by failing *closed*: web content that arrives without a wrapper is treated as a Critical abort signal.
 
 ### 4. Add the skill reference to your CLAUDE.md
 

@@ -1,6 +1,6 @@
 {
     "$schema_version": "1.1.0",
-    "comment": "Default risk-tier assignments per FR-8. SQLite overrides at ~/.claude/safe-web-research/state.db take precedence; hook merges repo defaults ⊕ SQLite overrides at startup. Conflicts log a warning. Unknown signals default to Elevated.",
+    "comment": "Risk-tier assignments per FR-8. This file is the single source of truth: the hooks read it on every invocation, so edits take effect without a restart. Per-domain threshold overrides go under per_domain_overrides. Signals that fire without an entry in `signals` default to Elevated.",
     "thresholds": {
         "oversized_response_bytes": 5242880,
         "repeating_substring_ratio_max": 0.45,
