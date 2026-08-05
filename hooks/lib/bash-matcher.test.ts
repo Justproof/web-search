@@ -88,6 +88,34 @@ describe("rewrite", () => {
 		expect(matchBashCommand("curl https://x.test").writesToFile).toBe(false);
 	});
 
+	test("an apostrophe in a quoted heredoc is not an unbalanced quote", () => {
+		// Regression: `git commit <<'MSG' … don't … MSG` was reported as
+		// unparseable, so every commit with an apostrophe drew a web-hygiene
+		// advisory. Quoted heredoc bodies are literal data, not shell syntax.
+		const cmd = "git commit -F - <<'MSG'\ndon't do this\nMSG";
+		const m = matchBashCommand(cmd);
+		expect(m.parseFailed).toBe(false);
+		expect(m.matched).toBe(false);
+	});
+
+	test("backticks inside a quoted heredoc are not command substitutions", () => {
+		const cmd =
+			"git commit -F - <<'MSG'\nmentions `curl -sL https://x.test` in prose\nMSG";
+		expect(matchBashCommand(cmd).matched).toBe(false);
+	});
+
+	test("an unquoted heredoc still gets scanned — it expands substitutions", () => {
+		const cmd = "cat <<EOF\n$(curl https://x.test)\nEOF";
+		expect(matchBashCommand(cmd).bins).toContain("curl");
+	});
+
+	test("possibleFetch gates the noisy advisory", () => {
+		expect(matchBashCommand("git commit -m \"it's fine").possibleFetch).toBe(
+			false,
+		);
+		expect(matchBashCommand(`curl "https://x.test`).possibleFetch).toBe(true);
+	});
+
 	test("reports unparseable input instead of silently passing", () => {
 		const m = matchBashCommand(`curl "https://x.test`);
 		expect(m.parseFailed).toBe(true);

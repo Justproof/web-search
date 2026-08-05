@@ -82,6 +82,10 @@ export interface BashMatch {
 	bins: string[];
 	interpreterDetected: boolean;
 	writesToFile: boolean;
+	// True when the command mentions a URL or a fetch/interpreter binary at all.
+	// Callers use it to decide whether an unparseable command is worth
+	// mentioning: on `git commit`, it never is.
+	possibleFetch: boolean;
 	rewrittenCommand: string | null;
 	parseFailed: boolean;
 	reason: string | null;
@@ -281,6 +285,49 @@ const extractCommandSubstitutions = (s: string): string[] => {
 	return out;
 };
 
+// Remove the bodies of quoted heredocs (<<'EOF' / <<"EOF"), which the shell
+// treats as literal data: no quote pairing, no expansion, no command inside.
+// Counting their contents as shell syntax made every `git commit <<'MSG'`
+// whose message contained an apostrophe look like an unterminated quote.
+//
+// Unquoted heredocs (<<EOF) are deliberately left in place — those DO expand
+// $(…), so a fetch hidden in one is a real command the matcher must still see.
+export const stripQuotedHeredocBodies = (raw: string): string => {
+	const opener = /<<-?\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\1/g;
+	let out = "";
+	let cursor = 0;
+	let m: RegExpExecArray | null;
+	while ((m = opener.exec(raw)) !== null) {
+		const delimiter = m[2]!;
+		const lineEnd = raw.indexOf("\n", m.index + m[0].length);
+		if (lineEnd === -1) {
+			break; // opener with no body yet — nothing to strip
+		}
+		// Terminator: a line containing only the delimiter (leading whitespace
+		// allowed, since <<- strips tabs).
+		const terminator = new RegExp(`^[ \\t]*${delimiter}[ \\t]*$`, "m");
+		const rest = raw.slice(lineEnd + 1);
+		const t = terminator.exec(rest);
+		const bodyEnd =
+			t === null ? raw.length : lineEnd + 1 + t.index + t[0].length;
+		out += raw.slice(cursor, lineEnd + 1);
+		cursor = bodyEnd;
+		opener.lastIndex = bodyEnd;
+	}
+	return out + raw.slice(cursor);
+};
+
+// Cheap pre-check: does this command plausibly touch the network at all? Used
+// to keep the unparseable-command advisory off the ~99% of Bash calls that
+// have nothing to do with fetching, where it is pure noise.
+export const looksLikeFetch = (raw: string): boolean => {
+	if (/\bhttps?:\/\//i.test(raw)) {
+		return true;
+	}
+	const names = [...FETCH_BINS, ...INTERPRETER_BINS].join("|");
+	return new RegExp(`(^|[;&|(]\\s*|\\s)(${names})\\s`, "i").test(raw);
+};
+
 // shell-quote parses an unterminated quote without complaining, but wrapping
 // such a command in `( … ) | sanitiser` changes what the shell actually runs —
 // the trailing paren and pipe get swallowed by the open quote. Detect it and
@@ -304,12 +351,19 @@ export const hasUnbalancedQuotes = (raw: string): boolean => {
 };
 
 export const matchBashCommand = (raw: string): BashMatch => {
-	if (hasUnbalancedQuotes(raw)) {
+	// Heredoc bodies with quoted delimiters are literal data. Analysing them as
+	// shell syntax produced both false "unbalanced quotes" verdicts and phantom
+	// command substitutions from backticks inside prose.
+	const analysed = stripQuotedHeredocBodies(raw);
+	const possibleFetch = looksLikeFetch(analysed);
+
+	if (hasUnbalancedQuotes(analysed)) {
 		return {
 			matched: false,
 			bins: [],
 			interpreterDetected: false,
 			writesToFile: false,
+			possibleFetch,
 			rewrittenCommand: null,
 			parseFailed: true,
 			reason:
@@ -319,13 +373,14 @@ export const matchBashCommand = (raw: string): BashMatch => {
 
 	let tokens: ParsedToken[];
 	try {
-		tokens = parse(raw) as ParsedToken[];
+		tokens = parse(analysed) as ParsedToken[];
 	} catch (err) {
 		return {
 			matched: false,
 			bins: [],
 			interpreterDetected: false,
 			writesToFile: false,
+			possibleFetch,
 			rewrittenCommand: null,
 			parseFailed: true,
 			reason: (err as Error).message,
@@ -357,6 +412,7 @@ export const matchBashCommand = (raw: string): BashMatch => {
 					bins: [],
 					interpreterDetected: false,
 					writesToFile: false,
+					possibleFetch,
 					rewrittenCommand: null,
 					parseFailed: true,
 					reason: "bash -c inner unparseable",
@@ -376,6 +432,7 @@ export const matchBashCommand = (raw: string): BashMatch => {
 			bins: [],
 			interpreterDetected: false,
 			writesToFile: false,
+			possibleFetch,
 			rewrittenCommand: null,
 			parseFailed: false,
 			reason: null,
@@ -397,6 +454,7 @@ export const matchBashCommand = (raw: string): BashMatch => {
 		bins: dedup,
 		interpreterDetected,
 		writesToFile,
+		possibleFetch,
 		rewrittenCommand: rewritten,
 		parseFailed: false,
 		reason: null,

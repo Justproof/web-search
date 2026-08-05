@@ -209,6 +209,12 @@ const handleBash = (input: PreToolUseInput): HookOutput => {
 		return {};
 	}
 	if (m.parseFailed) {
+		// Only worth saying when the command could plausibly fetch something.
+		// Otherwise every `git commit` with an apostrophe in its message earns
+		// a warning about web hygiene, and the advisory trains you to skim.
+		if (!m.possibleFetch) {
+			return {};
+		}
 		return contextOnly([
 			`[safe-web-research] Bash command could not be parsed by shell-quote AST (${m.reason}). If this command performs web fetches, prefer WebFetch instead — sanitiser cannot wrap unparseable Bash output. Proceeding unwrapped.`,
 		]);
