@@ -117,17 +117,59 @@ const neutraliseWrapperTags = (s: string): string =>
 const sha256Hex = (s: string): string =>
 	createHash("sha256").update(s, "utf8").digest("hex");
 
-const stripBetween = (input: string, openIdx: number, tag: string): string => {
-	const closeRe = new RegExp(`</${tag}\\s*>`, "i");
-	const remainder = input.slice(openIdx);
-	const match = closeRe.exec(remainder);
-	if (!match) {
-		return input.slice(0, openIdx);
+// HTML void elements never have a closing tag. Searching for one and treating
+// its absence as "this element runs to the end of the document" is how a single
+// <img aria-hidden="true"> used to delete an entire article: a live fetch of a
+// 297 KB Wikipedia page came back as 3.4 KB.
+const VOID_TAGS = new Set([
+	"area",
+	"base",
+	"br",
+	"col",
+	"embed",
+	"hr",
+	"img",
+	"input",
+	"link",
+	"meta",
+	"param",
+	"source",
+	"track",
+	"wbr",
+]);
+
+// Remove the element that starts at openIdx. Three cases, in order:
+//   void tag        -> drop the tag itself, nothing more
+//   properly closed -> drop through its matching close, counting nesting so a
+//                      hidden <div> containing <div>s doesn't end at the first
+//                      </div> and leak its tail
+//   never closed    -> drop ONLY the opening tag. Never truncate the document;
+//                      malformed markup is not a licence to discard content.
+const stripElementAt = (
+	input: string,
+	openIdx: number,
+	openTagLength: number,
+	tag: string,
+): string => {
+	const dropOpenTagOnly = (): string =>
+		input.slice(0, openIdx) + input.slice(openIdx + openTagLength);
+
+	if (VOID_TAGS.has(tag)) {
+		return dropOpenTagOnly();
 	}
-	return (
-		input.slice(0, openIdx) +
-		input.slice(openIdx + match.index + match[0].length)
-	);
+
+	const scanner = new RegExp(`<(/?)${tag}\\b[^>]*>`, "gi");
+	scanner.lastIndex = openIdx + openTagLength;
+	let depth = 1;
+	let guard = 0;
+	let m: RegExpExecArray | null;
+	while ((m = scanner.exec(input)) !== null && guard++ < 10_000) {
+		depth += m[1] === "/" ? -1 : 1;
+		if (depth === 0) {
+			return input.slice(0, openIdx) + input.slice(m.index + m[0].length);
+		}
+	}
+	return dropOpenTagOnly();
 };
 
 const stripBoilerplateTags = (
@@ -145,7 +187,7 @@ const stripBoilerplateTags = (
 				break;
 			}
 			const before = out.length;
-			out = stripBetween(out, m.index, tag);
+			out = stripElementAt(out, m.index, m[0].length, tag);
 			const after = out.length;
 			if (after === before) {
 				break;
@@ -170,7 +212,7 @@ const stripHiddenElements = (
 		}
 		const tag = m[1]!.toLowerCase();
 		const before = out.length;
-		out = stripBetween(out, m.index, tag);
+		out = stripElementAt(out, m.index, m[0].length, tag);
 		const after = out.length;
 		if (after === before) {
 			break;

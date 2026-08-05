@@ -47,6 +47,49 @@ describe("strip rules", () => {
 		).not.toContain("X");
 	});
 
+	test("a void element with a hidden attribute does not eat the document", () => {
+		// Regression from a live fetch: one <img aria-hidden="true"> truncated a
+		// 297 KB Wikipedia article to 3.4 KB, because a void tag has no closing
+		// tag and "no close found" meant "delete to end of document".
+		const html = `<p>intro</p><img aria-hidden="true" src="i.png"><p>ARTICLE BODY</p>`;
+		const r = sanitise(html);
+		expect(r.sanitised).toContain("ARTICLE BODY");
+		expect(r.sanitised).toContain("intro");
+		expect(r.sanitised).not.toContain("<img");
+	});
+
+	test("an unclosed hidden element drops only its opening tag", () => {
+		const r = sanitise(
+			`<p>intro</p><span aria-hidden="true"><p>ARTICLE BODY</p>`,
+		);
+		expect(r.sanitised).toContain("ARTICLE BODY");
+		expect(r.sanitised).not.toContain("aria-hidden");
+	});
+
+	test("a hidden container is removed through its MATCHING close tag", () => {
+		// First-close matching leaked the tail of any hidden block that nested
+		// the same tag — the payload after the inner </div> survived.
+		const r = sanitise(
+			`<p>keep</p><div style="display:none">A<div>B</div>LEAKED</div><p>after</p>`,
+		);
+		expect(r.sanitised).toContain("keep");
+		expect(r.sanitised).toContain("after");
+		expect(r.sanitised).not.toContain("LEAKED");
+		expect(r.sanitised).not.toContain("A");
+	});
+
+	test("nested boilerplate is removed through its matching close tag", () => {
+		const r = sanitise(`<p>keep</p><nav>a<nav>b</nav>LEAKED</nav><p>after</p>`);
+		expect(r.sanitised).toContain("keep");
+		expect(r.sanitised).toContain("after");
+		expect(r.sanitised).not.toContain("LEAKED");
+	});
+
+	test("an unclosed boilerplate tag does not truncate the page", () => {
+		const r = sanitise(`<p>intro</p><nav><p>ARTICLE BODY</p>`);
+		expect(r.sanitised).toContain("ARTICLE BODY");
+	});
+
 	test("keeps header and footer content", () => {
 		const r = sanitise("<header><h1>Title</h1></header><footer>2026</footer>");
 		expect(r.sanitised).toContain("Title");
