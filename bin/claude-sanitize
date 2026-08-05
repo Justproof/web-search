@@ -53,7 +53,7 @@ const sanitiseStdin = async (urlHint: string): Promise<void> => {
         redirectHops: 0,
         zeroWidthCount: result.zeroWidthCount,
         tagCharCount: result.tagCharCount,
-        strippedBytes: result.strippedBytes,
+        concealedBytes: result.concealedBytes,
         originalBytes: result.originalBytes,
         simhash: computeSimhash(result.sanitised),
         sessionId,

@@ -88,7 +88,11 @@ export interface SignalContext {
 	redirectHops: number;
 	zeroWidthCount: number;
 	tagCharCount: number;
-	strippedBytes: number;
+	// Bytes removed by the concealment rules only (comments, hidden elements,
+	// invisible characters) — NOT the total stripped. Scripts, styles and
+	// boilerplate are page furniture; counting them made this a measure of how
+	// much markup a page carries, which fired on entirely benign pages.
+	concealedBytes: number;
 	originalBytes: number;
 	simhash: string | null;
 	sessionId: string | null;
@@ -177,10 +181,12 @@ export const computeSignals = (ctx: SignalContext): SignalResult => {
 		detail.zero_width_count = ctx.zeroWidthCount;
 	}
 
-	// hidden_content_ratio_high
+	// hidden_content_ratio_high — concealed bytes only, so an ordinary page with
+	// a large stylesheet no longer reads as one hiding something.
 	const ratio =
-		ctx.originalBytes === 0 ? 0 : ctx.strippedBytes / ctx.originalBytes;
+		ctx.originalBytes === 0 ? 0 : ctx.concealedBytes / ctx.originalBytes;
 	detail.hidden_content_ratio = ratio;
+	detail.concealed_bytes = ctx.concealedBytes;
 	if (ratio > t.hidden_content_ratio_max) {
 		fired.push("hidden_content_ratio_high");
 	}

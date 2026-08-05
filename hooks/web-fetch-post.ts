@@ -207,7 +207,7 @@ const main = async (): Promise<void> => {
 		redirectHops: refetchResult?.redirectHops ?? 0,
 		zeroWidthCount: sanResult.zeroWidthCount,
 		tagCharCount: sanResult.tagCharCount,
-		strippedBytes: sanResult.strippedBytes,
+		concealedBytes: sanResult.concealedBytes,
 		originalBytes: sanResult.originalBytes,
 		simhash: agentSimhash,
 		// FR-31: url_cardinality_explosion and near_duplicate_to_session are

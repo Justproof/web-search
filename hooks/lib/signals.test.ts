@@ -35,7 +35,7 @@ const signalsFor = (body: string, overrides: Record<string, unknown> = {}) => {
 		redirectHops: 0,
 		zeroWidthCount: s.zeroWidthCount,
 		tagCharCount: s.tagCharCount,
-		strippedBytes: s.strippedBytes,
+		concealedBytes: s.concealedBytes,
 		originalBytes: s.originalBytes,
 		simhash: null,
 		sessionId: null,
@@ -123,6 +123,27 @@ describe("content signals", () => {
 			contentTypeHeader: "application/json",
 		}).fired;
 		expect(fired).toContain("content_type_mismatch");
+	});
+
+	test("hidden_content_ratio_high ignores page furniture", () => {
+		// Regression from a live fetch of example.com: 559 bytes, 173 stripped,
+		// ratio 0.309 — every byte of it a <style> block and a data: favicon,
+		// nothing concealed. It earned an Elevated signal for being a web page.
+		const styleHeavy =
+			`<!doctype html><html><head><style>${"body{margin:0;padding:0;font:16px system-ui}".repeat(6)}</style>` +
+			`<link rel="icon" href="data:,"></head><body><p>Short.</p></body></html>`;
+		const fired = signalsFor(styleHeavy).fired;
+		expect(fired).not.toContain("hidden_content_ratio_high");
+	});
+
+	test("hidden_content_ratio_high still fires on genuinely concealed content", () => {
+		const concealed = `<p>ok</p><div style="display:none">${"concealed instruction ".repeat(40)}</div>`;
+		expect(signalsFor(concealed).fired).toContain("hidden_content_ratio_high");
+	});
+
+	test("HTML comments count as concealment", () => {
+		const commented = `<p>hi</p><!--${"padding ".repeat(60)}-->`;
+		expect(signalsFor(commented).fired).toContain("hidden_content_ratio_high");
 	});
 
 	test("redirect_chain_long fires past the hop cap", () => {

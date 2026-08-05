@@ -25,6 +25,21 @@ export type StripRule =
 	| "boilerplate"
 	| "zwsp";
 
+// Rules that remove content a human reader was never going to see: comments,
+// elements hidden by CSS/attribute, and invisible characters. These are the
+// concealment vectors, and only these feed hidden_content_ratio.
+//
+// The other three rules — scripts/style/iframe, event handlers, boilerplate —
+// remove ordinary page furniture that every HTML page carries. Counting them
+// made the ratio a measure of "how much markup is on this page", which fired
+// on example.com: 173 stripped bytes, all of it a <style> block and a data:
+// favicon, nothing concealed at all.
+export const CONCEALING_RULES: readonly StripRule[] = [
+	"comments",
+	"hidden",
+	"zwsp",
+];
+
 export interface SanitiseOptions {
 	url?: string;
 	fetchedAt?: string;
@@ -40,7 +55,11 @@ export interface SanitiseResult {
 	zeroWidthCount: number;
 	tagCharCount: number;
 	tagCharDecoded: string;
+	// Total bytes removed by every rule.
 	strippedBytes: number;
+	// Bytes removed by CONCEALING_RULES only — what hidden_content_ratio measures.
+	concealedBytes: number;
+	strippedByRule: Partial<Record<StripRule, number>>;
 	hiddenContentRatio: number;
 	diffSummary: string[];
 }
@@ -166,8 +185,16 @@ export const sanitise = (input: string): SanitiseResult => {
 	const contentSha256 = sha256Hex(input);
 	const rulesApplied: StripRule[] = [];
 	const diffSummary: string[] = [];
+	const strippedByRule: Partial<Record<StripRule, number>> = {};
 	let working = input;
 	let strippedBytes = 0;
+
+	const record = (rule: StripRule, bytes: number, summary: string): void => {
+		rulesApplied.push(rule);
+		diffSummary.push(summary);
+		strippedByRule[rule] = (strippedByRule[rule] ?? 0) + bytes;
+		strippedBytes += bytes;
+	};
 
 	// 1. HTML comments
 	let removed = 0;
@@ -176,18 +203,14 @@ export const sanitise = (input: string): SanitiseResult => {
 		return "";
 	});
 	if (removed > 0) {
-		rulesApplied.push("comments");
-		diffSummary.push(`comments: -${removed}B`);
-		strippedBytes += removed;
+		record("comments", removed, `comments: -${removed}B`);
 	}
 
 	// 2. Hidden / off-screen / aria-hidden elements
 	const hiddenResult = stripHiddenElements(working);
 	if (hiddenResult.removed > 0) {
 		working = hiddenResult.out;
-		rulesApplied.push("hidden");
-		diffSummary.push(`hidden: -${hiddenResult.removed}B`);
-		strippedBytes += hiddenResult.removed;
+		record("hidden", hiddenResult.removed, `hidden: -${hiddenResult.removed}B`);
 	}
 
 	// 3. <script>, <style>, <iframe>
@@ -205,9 +228,7 @@ export const sanitise = (input: string): SanitiseResult => {
 		});
 	}
 	if (blockRemoved > 0) {
-		rulesApplied.push("scripts");
-		diffSummary.push(`scripts/style/iframe: -${blockRemoved}B`);
-		strippedBytes += blockRemoved;
+		record("scripts", blockRemoved, `scripts/style/iframe: -${blockRemoved}B`);
 	}
 
 	// 4. Inline event handlers + javascript:/data: URIs
@@ -219,18 +240,22 @@ export const sanitise = (input: string): SanitiseResult => {
 		});
 	}
 	if (attrRemoved > 0) {
-		rulesApplied.push("event_handlers");
-		diffSummary.push(`event_handlers/js_uris: -${attrRemoved}B`);
-		strippedBytes += attrRemoved;
+		record(
+			"event_handlers",
+			attrRemoved,
+			`event_handlers/js_uris: -${attrRemoved}B`,
+		);
 	}
 
 	// 5. Boilerplate chrome — nav, noscript, svg, aside
 	const boilerplateResult = stripBoilerplateTags(working);
 	if (boilerplateResult.removed > 0) {
 		working = boilerplateResult.out;
-		rulesApplied.push("boilerplate");
-		diffSummary.push(`boilerplate: -${boilerplateResult.removed}B`);
-		strippedBytes += boilerplateResult.removed;
+		record(
+			"boilerplate",
+			boilerplateResult.removed,
+			`boilerplate: -${boilerplateResult.removed}B`,
+		);
 	}
 
 	// 6. Invisible Unicode — zero-width, joiners, bidi controls, variation
@@ -242,18 +267,22 @@ export const sanitise = (input: string): SanitiseResult => {
 		const beforeBytes = Buffer.byteLength(working, "utf8");
 		working = working.replace(INVISIBLE_CHARS, "");
 		const invisibleBytes = beforeBytes - Buffer.byteLength(working, "utf8");
-		rulesApplied.push("zwsp");
-		diffSummary.push(
+		record(
+			"zwsp",
+			invisibleBytes,
 			tagCharCount > 0
 				? `invisible: -${zeroWidthCount} chars (${tagCharCount} unicode tag chars)`
 				: `invisible: -${zeroWidthCount} chars`,
 		);
-		strippedBytes += invisibleBytes;
 	}
 
 	const sanitisedBytes = Buffer.byteLength(working, "utf8");
+	const concealedBytes = CONCEALING_RULES.reduce(
+		(sum, rule) => sum + (strippedByRule[rule] ?? 0),
+		0,
+	);
 	const hiddenContentRatio =
-		originalBytes === 0 ? 0 : strippedBytes / originalBytes;
+		originalBytes === 0 ? 0 : concealedBytes / originalBytes;
 
 	return {
 		sanitised: working,
@@ -265,6 +294,8 @@ export const sanitise = (input: string): SanitiseResult => {
 		tagCharCount,
 		tagCharDecoded,
 		strippedBytes,
+		concealedBytes,
+		strippedByRule,
 		hiddenContentRatio,
 		diffSummary,
 	};

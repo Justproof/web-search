@@ -55,7 +55,7 @@
         },
         "hidden_content_ratio_high": {
             "tier": "elevated",
-            "description": "Stripped bytes / total bytes exceeded hidden_content_ratio_max"
+            "description": "Concealed bytes / total bytes exceeded hidden_content_ratio_max. Concealed means removed by the comments, hidden-element, or invisible-character rules — scripts, styles and boilerplate are page furniture and are deliberately not counted"
         },
         "redirect_chain_long": {
             "tier": "elevated",
