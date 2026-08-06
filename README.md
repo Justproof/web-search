@@ -16,7 +16,7 @@ Without guardrails, it will cheerfully read a shady webpage that opens with "ign
 
 One caveat stated up front, because it shapes everything below: Claude Code does not let a hook replace the result of a *built-in* tool, so for `WebFetch` and `WebSearch` the raw response reaches Claude no matter what this project does — the sanitised copy and the risk verdict arrive alongside it. Shell fetches and MCP browser tools *are* fully controlled. If you want the stripping to be real rather than advisory, `strict` mode routes everything down the path where it is. See [Modes](#modes).
 
-No paranoia. Just everyday common sense, like sending a teenager out for milk and your certain they are not distracted or completing 8 side missions . Claude stays helpful and fast. It just stops being gullible.
+No paranoia. Just everyday common sense, like sending a teenager out for milk and you're certain they are not distracted or completing 8 side missions . Claude stays helpful and fast. It just stops being gullible.
 
 Ready to set it up? Grab a coffee and follow along. This takes about five minutes.
 
